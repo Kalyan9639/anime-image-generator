@@ -1,0 +1,10 @@
+Cloud Node 1 (VM / Server)                   Cloud Node 2 (VM / Server)
++------------------------------------------+   +------------------------------------------+
+|  [Process 1]              [Process 2]    |   |  [Process 3]              [Process 4]    |
+|       |                        |         |   |       ^                        |         |
+|       +-----------+------------+         |   |       |                        |         |
+|                   v                      |   |       |                        v         |
+|        Cloud Haskell Runtime &           |   |        Cloud Haskell Runtime &           |
+|        Network Transport Layer           |==>|        Network Transport Layer           |
++------------------------------------------+   +------------------------------------------+
+                  Async Message Passing (No Shared Memory)

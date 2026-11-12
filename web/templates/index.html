@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ASCII to Image Generator</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="logo-icon">▦</div>
+        <div>
+          <h1>ASCII → Image Generator</h1>
+          <p class="subtitle">Pure mathematical & graphics pipeline • Zero AI • Vector SVG & High-DPI PNG</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span class="badge" id="envBadge">Python 3.11 • resvg • svgbob</span>
+      </div>
+    </header>
+
+    <main class="main-layout">
+      <!-- Left Panel: Input & Controls -->
+      <section class="panel editor-panel">
+        <div class="panel-header">
+          <h2>Input ASCII Text</h2>
+          <div class="samples-dropdown-wrapper">
+            <label for="sampleSelect">Samples:</label>
+            <select id="sampleSelect">
+              <option value="">Load a sample...</option>
+            </select>
+          </div>
+        </div>
+
+        <textarea id="asciiInput" placeholder="Paste your ASCII diagram or ASCII art here..." spellcheck="false"></textarea>
+
+        <div class="detection-card" id="detectionCard">
+          <div class="detection-header">
+            <span class="detection-pill" id="detectionPill">Type: Unknown</span>
+            <span class="detection-conf" id="detectionConf">-</span>
+          </div>
+          <p class="detection-explanation" id="detectionExplanation">Paste ASCII text or load a sample to inspect topology.</p>
+        </div>
+
+        <div class="controls-grid">
+          <div class="control-group">
+            <label for="modeSelect">Mode</label>
+            <select id="modeSelect">
+              <option value="auto">Auto-Detect</option>
+              <option value="diagram">Diagram (True Geometric Vector)</option>
+              <option value="art:reconstruct">Art: Photo Reconstruction (Bilateral + CLAHE)</option>
+              <option value="art:crisp">Art: Crisp Monospace Typography</option>
+              <option value="art:vector">Art: Line Vector Contours (Bézier)</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="themeSelect">Theme</label>
+            <select id="themeSelect">
+              <option value="auto">Auto (Light for Diagram, Dark for Art)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark Slate</option>
+              <option value="blueprint">Blueprint CAD</option>
+              <option value="tinted">Tinted Pastel</option>
+              <option value="terminal_green">Retro CRT Green</option>
+              <option value="amber">Retro Amber</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="scaleSelect">PNG Scale (DPI)</label>
+            <select id="scaleSelect">
+              <option value="1.0">1.0x (Standard)</option>
+              <option value="2.0" selected>2.0x (High-DPI Retina)</option>
+              <option value="3.0">3.0x (Ultra-HD / Print)</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="denoiseSlider">Denoise Smoothing: <span id="denoiseVal">1.0</span></label>
+            <input type="range" id="denoiseSlider" min="0.2" max="2.5" step="0.1" value="1.0">
+          </div>
+        </div>
+
+        <button class="btn btn-primary" id="btnConvert">
+          <span class="btn-icon">⚡</span> Convert to Image
+        </button>
+      </section>
+
+      <!-- Right Panel: Output & Previews -->
+      <section class="panel preview-panel">
+        <div class="panel-header">
+          <div class="tabs">
+            <button class="tab-btn active" data-tab="previewTab">Image Preview</button>
+            <button class="tab-btn" data-tab="svgTab">SVG Source</button>
+          </div>
+          <div class="export-actions">
+            <button class="btn btn-secondary btn-sm" id="btnDownloadSvg" disabled>
+              ⬇ Download SVG
+            </button>
+            <button class="btn btn-primary btn-sm" id="btnDownloadPng" disabled>
+              ⬇ Download PNG
+            </button>
+          </div>
+        </div>
+
+        <div class="tab-content active" id="previewTab">
+          <div class="preview-stage" id="previewStage">
+            <div class="placeholder-state" id="emptyPlaceholder">
+              <div class="placeholder-icon">🖼️</div>
+              <p>Your high-quality converted image will appear here.</p>
+              <p class="placeholder-hint">Try clicking on a sample above or paste your own ASCII art.</p>
+            </div>
+            <img id="previewImage" alt="Rendered Preview" style="display: none;">
+          </div>
+          <div class="preview-meta" id="previewMeta" style="display: none;">
+            <span id="metaDimensions">Dimensions: -</span>
+            <span id="metaSize">PNG Size: -</span>
+            <span id="metaMode">Render Mode: -</span>
+          </div>
+        </div>
+
+        <div class="tab-content" id="svgTab">
+          <div class="code-viewer-wrapper">
+            <pre><code id="svgCodeViewer">// SVG vector source will appear here...</code></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

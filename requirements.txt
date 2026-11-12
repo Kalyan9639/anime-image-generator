@@ -1,0 +1,8 @@
+markdown-svgbob>=0.2.1
+aafigure>=0.6
+resvg_py>=0.2.0
+opencv-python>=4.9.0
+Pillow>=10.0.0
+numpy>=1.26.0
+Flask>=3.0.0
+pytest>=8.0.0
