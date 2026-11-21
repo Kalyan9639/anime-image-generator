@@ -22,6 +22,11 @@ DEFAULT_FONT_CANDIDATES = [
     r"C:\Windows\Fonts\cour.ttf",      # Courier New
     r"C:\Windows\Fonts\lucon.ttf",     # Lucida Console
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
     "/System/Library/Fonts/Menlo.ttc",
 ]
 
@@ -65,7 +70,10 @@ class PhotometricAtlas:
         if self.font_path:
             self._font = ImageFont.truetype(self.font_path, font_size)
         else:
-            self._font = ImageFont.load_default()
+            try:
+                self._font = ImageFont.load_default(size=font_size)
+            except TypeError:
+                self._font = ImageFont.load_default()
 
         # Compute uniform monospace cell dimensions at this scale
         try:

@@ -129,3 +129,11 @@ def test_empty_input_safe():
     res = classify_ascii("")
     assert res.category == "art"
     assert res.confidence == 0.5
+
+
+def test_ansi_codes_stripped_before_detection():
+    colored_flowchart = "\x1b[32m" + SAMPLE_FLOWCHART.replace("Frontend", "\x1b[1;34mFrontend\x1b[0m") + "\x1b[0m"
+    res = classify_ascii(colored_flowchart)
+    assert res.category == "diagram"
+    assert res.subtype == "diagram:box"
+    assert res.confidence >= 0.70
