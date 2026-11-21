@@ -228,8 +228,9 @@ def main() -> None:
     effective_mode = resolve_effective_mode(mode, detection.category, detection.subtype)
     effective_theme = resolve_effective_theme(theme, effective_mode)
 
-    # diagram_to_svg accepts light/dark/blueprint/tinted
+    # diagram_to_svg accepts light/dark/blueprint/tinted; art modes accept light/dark/blueprint/terminal_green/amber
     diagram_theme = effective_theme if effective_theme in ("light", "dark", "blueprint", "tinted") else "light"
+    art_theme = "light" if effective_theme == "tinted" else effective_theme
 
     svg_content: str | None = None
     png_bytes: bytes | None = None
@@ -252,13 +253,13 @@ def main() -> None:
                     ok, buf = cv2.imencode(".png", mat)
                     if ok:
                         png_bytes = buf.tobytes()
-                    svg_content = render_art_crisp_svg(ascii_text, theme=effective_theme)
+                    svg_content = render_art_crisp_svg(ascii_text, theme=art_theme)
                 elif effective_mode == "art:vector":
-                    svg_content = vectorize_line_art_svg(ascii_text, theme=effective_theme)
+                    svg_content = vectorize_line_art_svg(ascii_text, theme=art_theme)
                     png_bytes = svg_to_png(svg_content, scale=scale)
                 else:  # art:crisp
-                    svg_content = render_art_crisp_svg(ascii_text, theme=effective_theme)
-                    png_bytes = render_art_crisp_png(ascii_text, theme=effective_theme)
+                    svg_content = render_art_crisp_svg(ascii_text, theme=art_theme)
+                    png_bytes = render_art_crisp_png(ascii_text, theme=art_theme)
 
             # Action bar: Download buttons
             dl_col1, dl_col2 = st.columns(2)

@@ -12,10 +12,12 @@ from typing import Optional
 
 import resvg_py
 
+from .ink import resolve_monospace_font
+
 
 def extract_svg_background(svg_string: str) -> Optional[str]:
     """Attempts to discover background color from <rect class="bg-canvas" fill="..."> or style."""
-    match = re.search(r'rect\.(?:bg-canvas|bg)\s*\{\s*fill:\s*([^;]+);', svg_string)
+    match = re.search(r'rect\.(?:bg-canvas|bg)\s*\{\s*fill:\s*([^;!]+)', svg_string)
     if match:
         return match.group(1).strip()
     match_attr = re.search(r'<rect[^>]+fill="([^"]+)"[^>]*class="(?:bg-canvas|bg)"', svg_string)
@@ -31,13 +33,14 @@ def svg_to_png(
 ) -> bytes:
     """
     Renders SVG markup into PNG image bytes with high-DPI scaling.
-    
+
     :param svg_string: Complete SVG document markup as a string.
     :param scale: Zoom factor (e.g. 2.0 for 2x Retina / supersampled output).
     :param background: Optional CSS background color (e.g. "#ffffff" or "#0f172a").
     :return: PNG-encoded binary bytes.
     """
     bg = background or extract_svg_background(svg_string)
+    mono_font = resolve_monospace_font()
 
     kwargs = {
         "svg_string": svg_string,
@@ -48,15 +51,18 @@ def svg_to_png(
     }
     if bg:
         kwargs["background"] = bg
+    if mono_font:
+        kwargs["font_files"] = [mono_font]
 
     try:
-        png_bytes = resvg_py.svg_to_bytes(**kwargs)
-    except Exception as e:
-        # Retry without background keyword if color string was rejected
-        if "background" in kwargs:
-            kwargs.pop("background")
-            png_bytes = resvg_py.svg_to_bytes(**kwargs)
-        else:
-            raise e
-
-    return png_bytes
+        return resvg_py.svg_to_bytes(**kwargs)
+    except Exception:
+        # Retry without optional font_files / background overrides
+        kwargs.pop("font_files", None)
+        try:
+            return resvg_py.svg_to_bytes(**kwargs)
+        except Exception:
+            if "background" in kwargs:
+                kwargs.pop("background")
+                return resvg_py.svg_to_bytes(**kwargs)
+            raise

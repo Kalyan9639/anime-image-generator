@@ -185,12 +185,17 @@ def _calculate_line_sketch_score(text: str, total_non_space: int) -> float:
     return sketch_count / total_non_space
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
 def classify_ascii(text: str) -> DetectionResult:
     """
     Evaluates 6 topological and statistical features to accurately classify
     ASCII input as an engineering diagram or aesthetic art.
     """
-    raw_lines = [l.rstrip("\r\n") for l in text.splitlines()]
+    cleaned = _ANSI_RE.sub("", text)
+    raw_lines = [l.rstrip("\r\n").expandtabs(4) for l in cleaned.splitlines()]
+    text = "\n".join(raw_lines)
     # Remove leading and trailing completely blank lines
     while raw_lines and not raw_lines[0].strip():
         raw_lines.pop(0)
@@ -283,6 +288,16 @@ def classify_ascii(text: str) -> DetectionResult:
             confidence=float(conf),
             scores=scores,
             explanation=f"ASCII art illustration/scene: contains drawn geometry (roof/windows) with {f5_shading_score*100:.1f}% shading (e.g. foliage) and no relational arrows.",
+        )
+
+    # Directory trees (├── / └──) without closed right-side box borders render cleanest in crisp mode
+    if ("├──" in text or "└──" in text) and n_arrows == 0 and n_labels == 0 and "┐" not in text and "┘" not in text:
+        return DetectionResult(
+            category="art",
+            subtype="art:line",
+            confidence=0.90,
+            scores=scores,
+            explanation="Directory tree structure detected (preserves crisp tree glyphs cleanly).",
         )
 
     # Strong Diagram Indicators: verified corners, arrows, or enclosed box labels

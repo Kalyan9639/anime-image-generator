@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import io
+import re
 from typing import List, Literal, Optional, Tuple
 
 import cv2
@@ -20,6 +21,9 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .ink import get_photometric_atlas, resolve_monospace_font
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 ThemeType = Literal["light", "dark", "terminal_green", "amber", "blueprint"]
@@ -36,8 +40,9 @@ ART_PALETTES = {
 
 
 def _split_and_pad(text: str) -> Tuple[List[str], int, int]:
-    """Cleans, splits, and right-pads ASCII lines to a uniform rectangle."""
-    lines = [l.rstrip("\r\n") for l in text.splitlines()]
+    """Sanitizes ANSI codes/tabs, splits, and right-pads ASCII lines to a uniform rectangle."""
+    cleaned = _ANSI_RE.sub("", text)
+    lines = [l.rstrip("\r\n").expandtabs(4) for l in cleaned.splitlines()]
     while lines and not lines[0].strip():
         lines.pop(0)
     while lines and not lines[-1].strip():
@@ -116,7 +121,10 @@ def render_art_crisp_png(
     if resolved_font:
         font = ImageFont.truetype(resolved_font, font_size)
     else:
-        font = ImageFont.load_default()
+        try:
+            font = ImageFont.load_default(size=font_size)
+        except TypeError:
+            font = ImageFont.load_default()
 
     try:
         ascent, descent = font.getmetrics()
@@ -227,14 +235,14 @@ def reconstruct_art_photo(
     img_8u = np.clip(upsampled * 255.0, 0, 255).astype(np.uint8)
 
     # 4. Non-Linear Edge-Preserving Bilateral Filtering
-    # d: filter neighborhood diameter, scaled to character cell pixel size
-    cell_px_h = target_h / h_chars
-    d_val = max(5, int(round(cell_px_h * 0.75)))
+    # d: filter neighborhood diameter, scaled to character cell pixel size and capped for speed
+    cell_px_h = target_h / max(1, h_chars)
+    d_val = max(5, min(15, int(round(cell_px_h * 0.75))))
     if d_val % 2 == 0:
         d_val += 1
 
     sigma_color = max(20.0, 45.0 * denoise_strength)
-    sigma_space = max(5.0, (cell_px_h * 0.6) * denoise_strength)
+    sigma_space = max(5.0, min(24.0, (cell_px_h * 0.6) * denoise_strength))
 
     # Pass 1: Merges internal character grid steps
     bilateral_1 = cv2.bilateralFilter(img_8u, d=d_val, sigmaColor=sigma_color, sigmaSpace=sigma_space)
@@ -243,8 +251,15 @@ def reconstruct_art_photo(
     bilateral_2 = cv2.bilateralFilter(bilateral_1, d=max(3, d_val // 2), sigmaColor=sigma_color * 0.75, sigmaSpace=sigma_space * 0.5)
 
     # 5. CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    # Protect uniform bright background from CLAHE gray blotches via soft foreground mask
     clahe = cv2.createCLAHE(clipLimit=max(1.0, clahe_clip), tileGridSize=(8, 8))
-    clahe_enhanced = clahe.apply(bilateral_2)
+    clahe_raw = clahe.apply(bilateral_2)
+    fg_weight = np.clip((250.0 - bilateral_2.astype(np.float32)) / 30.0, 0.0, 1.0)
+    clahe_enhanced = np.clip(
+        fg_weight * clahe_raw.astype(np.float32) + (1.0 - fg_weight) * bilateral_2.astype(np.float32),
+        0,
+        255,
+    ).astype(np.uint8)
 
     # Final Stage: Subtle Thresholded Unsharp Masking
     gaussian = cv2.GaussianBlur(clahe_enhanced, (0, 0), sigmaX=1.5)
@@ -307,11 +322,16 @@ def vectorize_line_art_svg(
         if len(approx) < 3:
             continue
 
-        # Convert polygon points into SVG path data
-        pts = approx.reshape(-1, 2)
-        d_parts = [f"M {pts[0][0]} {pts[0][1]}"]
-        for pt in pts[1:]:
-            d_parts.append(f"L {pt[0]} {pt[1]}")
+        # Convert simplified contour into smooth closed quadratic Bézier curves
+        pts = approx.reshape(-1, 2).astype(np.float32)
+        n_pts = len(pts)
+        mid0 = (pts[-1] + pts[0]) * 0.5
+        d_parts = [f"M {mid0[0]:.1f} {mid0[1]:.1f}"]
+        for idx in range(n_pts):
+            ctrl = pts[idx]
+            nxt = pts[(idx + 1) % n_pts]
+            mid = (ctrl + nxt) * 0.5
+            d_parts.append(f"Q {ctrl[0]:.1f} {ctrl[1]:.1f} {mid[0]:.1f} {mid[1]:.1f}")
         d_parts.append("Z")
         path_data_list.append(" ".join(d_parts))
 

@@ -3,9 +3,13 @@ Unit tests for the Diagram Rendering Pipeline (ascii2image.diagram & export).
 """
 
 import xml.etree.ElementTree as ET
+from pathlib import Path
 import pytest
 from ascii2image.diagram import diagram_to_svg, get_available_engines
 from ascii2image.export import svg_to_png
+
+
+SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples"
 
 
 SAMPLE_DIAGRAM = """
@@ -49,3 +53,34 @@ def test_svg_to_png_export():
     assert isinstance(png_bytes, bytes)
     assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
     assert len(png_bytes) > 200
+
+
+def test_aafigure_to_png_no_xml_error():
+    """
+    Regression test for Streamlit Cloud error 'unknown token at 31:5':
+    aafigure SVGs across all themes must parse as valid XML and export cleanly via resvg_py.
+    """
+    for sample_name in ("flowchart.txt", "network.txt"):
+        text = (SAMPLES_DIR / sample_name).read_text(encoding="utf-8")
+        for theme in ("light", "dark", "blueprint", "tinted"):
+            svg = diagram_to_svg(text, engine="aafigure", theme=theme)
+            root = ET.fromstring(svg)
+            assert "svg" in root.tag
+            png_bytes = svg_to_png(svg, scale=1.5)
+            assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+            assert len(png_bytes) > 500
+
+
+def test_unicode_diagram_to_svg_and_png():
+    unicode_diag = """
+┌──────────┐     ┌──────────┐
+│  Client  │ ──▶ │  Server  │
+└──────────┘     └──────────┘
+"""
+    for engine in ("svgbob", "aafigure"):
+        svg = diagram_to_svg(unicode_diag, engine=engine, theme="light")
+        root = ET.fromstring(svg)
+        assert "svg" in root.tag
+        png_bytes = svg_to_png(svg, scale=2.0)
+        assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(png_bytes) > 300
