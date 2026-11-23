@@ -314,7 +314,7 @@ def main():
             created_files.append(svg_file)
 
         if args.format in ("both", "png"):
-            png_bytes = render_art_crisp_png(text, theme=theme)
+            png_bytes = render_art_crisp_png(text, theme=theme, scale=args.scale)
             png_file = out_dir / f"{stem}_crisp.png"
             png_file.write_bytes(png_bytes)
             created_files.append(png_file)

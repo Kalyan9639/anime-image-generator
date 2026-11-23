@@ -20,26 +20,50 @@ from typing import List, Literal, Optional
 import aafigure
 import markdown_svgbob
 
+from .normalize import sanitize_ascii_text
+
 
 EngineType = Literal["svgbob", "aafigure", "aasvg", "auto"]
 ThemeType = Literal["light", "dark", "blueprint", "tinted"]
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-# Map Unicode box-drawing & arrow symbols to svgbob/aafigure-compatible ASCII
+# Map Unicode box-drawing, dash, diagonal & arrow symbols to svgbob/aafigure-compatible ASCII
 _UNICODE_DIAGRAM_TRANS = str.maketrans({
+    # Light, double, heavy, and mixed corners/junctions
     "┌": "+", "┐": "+", "└": "+", "┘": "+",
     "├": "+", "┤": "+", "┬": "+", "┴": "+", "┼": "+",
     "╔": "+", "╗": "+", "╚": "+", "╝": "+",
     "╠": "+", "╣": "+", "╦": "+", "╩": "+", "╬": "+",
+    "┏": "+", "┓": "+", "┗": "+", "┛": "+",
+    "┣": "+", "┫": "+", "┳": "+", "┻": "+", "╋": "+",
+    "╒": "+", "╓": "+", "╕": "+", "╖": "+",
+    "╘": "+", "╙": "+", "╛": "+", "╜": "+",
+    "╞": "+", "╟": "+", "╡": "+", "╢": "+",
+    "╤": "+", "╥": "+", "╧": "+", "╨": "+", "╪": "+", "╫": "+",
+    "┍": "+", "┎": "+", "┑": "+", "┒": "+",
+    "┕": "+", "┖": "+", "┙": "+", "┚": "+",
+    "┝": "+", "┞": "+", "┟": "+", "┠": "+", "┡": "+", "┢": "+",
+    "┥": "+", "┦": "+", "┧": "+", "┨": "+", "┩": "+", "┪": "+",
+    "┭": "+", "┮": "+", "┯": "+", "┰": "+", "┱": "+", "┲": "+",
+    "┵": "+", "┶": "+", "┷": "+", "┸": "+", "┹": "+", "┺": "+",
+    "┽": "+", "┾": "+", "┿": "+", "╀": "+", "╁": "+", "╂": "+",
+    "╃": "+", "╄": "+", "╅": "+", "╆": "+", "╇": "+", "╈": "+", "╉": "+", "╊": "+",
+    # Rounded corners
     "╭": ".", "╮": ".", "╰": "'", "╯": "'",
+    # Horizontal lines & dashes
     "─": "-", "━": "-", "┄": "-", "┅": "-", "┈": "-", "┉": "-",
+    "╴": "-", "╶": "-", "╸": "-", "╺": "-",
+    "—": "-", "–": "-", "−": "-",
     "═": "=",
+    # Vertical lines
     "│": "|", "┃": "|", "║": "|", "┆": "|", "┇": "|", "┊": "|", "┋": "|",
-    "▶": ">", "►": ">", "→": ">", "⟶": ">",
-    "◀": "<", "◄": "<", "←": "<", "⟵": "<",
-    "▲": "^", "↑": "^",
-    "▼": "v", "↓": "v",
+    "╵": "|", "╷": "|", "╹": "|", "╻": "|",
+    # Diagonals
+    "╱": "/", "╲": "\\", "╳": "X",
+    # Arrows
+    "▶": ">", "►": ">", "→": ">", "⟶": ">", "⇒": ">", "➔": ">", "➜": ">", "➝": ">", "➞": ">", "➡": ">", "▸": ">", "▷": ">",
+    "◀": "<", "◄": "<", "←": "<", "⟵": "<", "⇐": "<", "⬅": "<", "◂": "<", "◁": "<",
+    "▲": "^", "↑": "^", "⇑": "^", "⬆": "^", "▴": "^", "△": "^",
+    "▼": "v", "↓": "v", "⇓": "v", "⬇": "v", "▾": "v", "▽": "v",
 })
 
 
@@ -65,7 +89,7 @@ THEME_CONFIGS = {
         "stroke_color": "#93c5fd",       # Light CAD Blue
         "fill_color": "#172554",         # Midnight Blue
         "text_color": "#ffffff",         # Pure White
-        "accent_color": "#67e8f9",       # Cyan
+        "accent_color": "#67e8f9",       # Cyan 300
         "font_family": "Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Courier New', monospace",
     },
     "tinted": {
@@ -82,38 +106,103 @@ THEME_CONFIGS = {
 def get_available_engines() -> List[str]:
     """Returns the list of available diagram rendering engines."""
     engines = ["svgbob", "aafigure"]
-    if shutil.which("aasvg"):
-        engines.append("aasvg")
+    try:
+        if shutil.which("aasvg"):
+            engines.append("aasvg")
+    except Exception:
+        pass
     return engines
 
 
-def _normalize_diagram_text(text: str) -> str:
+def _normalize_diagram_text(text: str, repair_alignment: bool = True) -> str:
     """
-    Sanitizes ANSI escape codes, expands tabs, and translates Unicode
-    box-drawing/arrow characters into standard ASCII diagram grammar.
+    Sanitizes ANSI escape codes, Unicode spaces, Markdown fences, tabs,
+    repairs missing first-line indentation, and translates Unicode box-drawing
+    and arrow characters into standard ASCII diagram grammar.
     """
-    cleaned = _ANSI_RE.sub("", text)
-    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-    cleaned = "\n".join(line.expandtabs(4) for line in cleaned.split("\n"))
+    cleaned, _ = sanitize_ascii_text(
+        text,
+        tab_size=4,
+        repair_alignment=repair_alignment,
+        strip_blank_edges=True,
+    )
     return cleaned.translate(_UNICODE_DIAGRAM_TRANS)
 
 
-def _ensure_svgbob_executable() -> None:
-    """On Linux/macOS cloud hosts, ensure bundled svgbob binary has +x permission."""
-    if os.name != "posix":
-        return
+def _convert_rounded_corners_for_aafigure(text: str) -> str:
+    """
+    aafigure does not recognize svgbob's `.---.` / `'---'` rounded-box syntax
+    and renders those corners as disconnected dots and literal dashes.
+    Converts `.` and `'` that sit at verified 90-degree box corners into `+`.
+    """
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return text
+    max_w = max(len(ln) for ln in lines)
+    grid = [list(ln.ljust(max_w)) for ln in lines]
+    h = len(grid)
+    horiz = set("-=")
+    vert = set("|")
+
+    for r in range(h):
+        for c in range(max_w):
+            ch = grid[r][c]
+            if ch not in (".", "'", "`"):
+                continue
+            has_h = (c > 0 and grid[r][c - 1] in horiz) or (c + 1 < max_w and grid[r][c + 1] in horiz)
+            if not has_h:
+                continue
+            if ch == "." and r + 1 < h and grid[r + 1][c] in vert:
+                grid[r][c] = "+"
+            elif ch in ("'", "`") and r > 0 and grid[r - 1][c] in vert:
+                grid[r][c] = "+"
+
+    return "\n".join("".join(row).rstrip() for row in grid)
+
+
+def _find_svgbob_binary() -> Optional[str]:
+    """
+    Safely locates the svgbob binary without crashing on restricted PATH entries
+    (a known pathlib2 PermissionError bug inside markdown_svgbob._get_usr_bin_path).
+    """
     try:
-        bin_path = str(markdown_svgbob.get_bin_path())
-        if os.path.isfile(bin_path) and not os.access(bin_path, os.X_OK):
-            current_mode = os.stat(bin_path).st_mode
-            os.chmod(bin_path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        usr_bin = shutil.which("svgbob")
+        if usr_bin and os.path.isfile(usr_bin):
+            return usr_bin
     except Exception:
         pass
 
+    try:
+        from markdown_svgbob.wrapper import _get_pkg_bin_path
+
+        pkg_bin = str(_get_pkg_bin_path())
+        if os.path.isfile(pkg_bin):
+            if os.name == "posix" and not os.access(pkg_bin, os.X_OK):
+                try:
+                    current_mode = os.stat(pkg_bin).st_mode
+                    os.chmod(pkg_bin, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                except Exception:
+                    pass
+            return pkg_bin
+    except Exception:
+        pass
+
+    return None
+
 
 def _render_with_svgbob(text: str) -> str:
-    """Renders ASCII diagram using svgbob."""
-    _ensure_svgbob_executable()
+    """Renders ASCII diagram using svgbob directly via stdin/stdout."""
+    bin_path = _find_svgbob_binary()
+    if bin_path:
+        proc = subprocess.run(
+            [bin_path],
+            input=text.encode("utf-8"),
+            capture_output=True,
+            check=True,
+            timeout=15,
+        )
+        return proc.stdout.decode("utf-8", errors="replace")
+
     svg_bytes = markdown_svgbob.text2svg(text)
     if isinstance(svg_bytes, bytes):
         return svg_bytes.decode("utf-8")
@@ -122,13 +211,15 @@ def _render_with_svgbob(text: str) -> str:
 
 def _render_with_aafigure(text: str) -> str:
     """Renders ASCII diagram using aafigure (100% pure Python)."""
+    aa_text = _convert_rounded_corners_for_aafigure(text)
     bio = io.BytesIO()
     options = {
         "format": "svg",
         "scale": 1.0,
         "line_width": 2.0,
+        "textual": True,
     }
-    aafigure.render(text, bio, options=options)
+    aafigure.render(aa_text, bio, options=options)
     return bio.getvalue().decode("utf-8")
 
 
@@ -139,6 +230,7 @@ def _render_with_aasvg(text: str) -> str:
         input=text.encode("utf-8"),
         capture_output=True,
         check=True,
+        timeout=15,
     )
     return proc.stdout.decode("utf-8")
 
@@ -146,7 +238,8 @@ def _render_with_aasvg(text: str) -> str:
 def _add_svg_padding(svg_content: str, pad: int = 16) -> str:
     """
     Expands the root <svg> width/height/viewBox by `pad` pixels on each side
-    so strokes along the outer edges are never clipped.
+    so strokes along the outer edges are never clipped, and guarantees
+    non-zero dimensions.
     """
     svg_match = re.search(r"<svg\b[^>]*>", svg_content, flags=re.IGNORECASE | re.DOTALL)
     if not svg_match:
@@ -158,8 +251,8 @@ def _add_svg_padding(svg_content: str, pad: int = 16) -> str:
     if not (w_match and h_match):
         return svg_content
 
-    w = float(w_match.group(1))
-    h = float(h_match.group(1))
+    w = max(1.0, float(w_match.group(1)))
+    h = max(1.0, float(h_match.group(1)))
     new_w = w + 2 * pad
     new_h = h + 2 * pad
 
@@ -168,6 +261,8 @@ def _add_svg_padding(svg_content: str, pad: int = 16) -> str:
         parts = vb_match.group(1).replace(",", " ").split()
         if len(parts) == 4:
             vx, vy, vw, vh = [float(p) for p in parts]
+            vw = max(1.0, vw)
+            vh = max(1.0, vh)
             new_vb = f"{vx - pad:.1f} {vy - pad:.1f} {vw + 2 * pad:.1f} {vh + 2 * pad:.1f}"
         else:
             new_vb = f"{-pad} {-pad} {new_w:.1f} {new_h:.1f}"
@@ -202,13 +297,21 @@ def style_diagram_svg(
     cleaned = re.sub(r"^\s*<\?xml[^>]*\?>\s*", "", svg_content, flags=re.IGNORECASE)
     cleaned = re.sub(r"^\s*<!DOCTYPE[^>]*>\s*", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
 
+    # Remove svgbob's inner <rect class="backdrop"...> so it never renders a double border
+    # inside our padded canvas.
+    cleaned = re.sub(
+        r'<rect\b[^>]*\bclass="backdrop"[^>]*(?:/>|>\s*</rect>)',
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
     # Expand canvas with outer padding so border strokes are never clipped
     if padding > 0:
         cleaned = _add_svg_padding(cleaned, pad=padding)
 
     custom_css = f"""
     <style>
-        rect.bg-canvas {{ fill: {conf["bg_color"]} !important; stroke: none !important; }}
         line, path, circle, rect, polygon {{
             stroke: {conf["stroke_color"]} !important;
             stroke-width: {stroke_width}px !important;
@@ -218,19 +321,20 @@ def style_diagram_svg(
         path {{
             fill: none;
         }}
+        .filled {{
+            fill: {conf["stroke_color"]} !important;
+        }}
+        .bg_filled, .nofill {{
+            fill: {conf["fill_color"]} !important;
+        }}
         polygon.arrowhead, marker path, marker polygon {{
             fill: {conf["stroke_color"]} !important;
             stroke: none !important;
         }}
-        rect.backdrop {{
+        rect.bg-canvas, rect.backdrop {{
             fill: {conf["bg_color"]} !important;
             stroke: none !important;
-        }}
-        .bg_filled, .filled {{
-            fill: {conf["fill_color"]} !important;
-        }}
-        .nofill {{
-            fill: {conf["fill_color"]} !important;
+            stroke-width: 0 !important;
         }}
         text {{
             fill: {conf["text_color"]} !important;
@@ -249,12 +353,13 @@ def style_diagram_svg(
         if len(parts) == 4:
             bg_rect = (
                 f'<rect x="{parts[0]}" y="{parts[1]}" '
-                f'width="{parts[2]}" height="{parts[3]}" class="bg-canvas"/>'
+                f'width="{parts[2]}" height="{parts[3]}" '
+                f'fill="{conf["bg_color"]}" stroke="none" class="bg-canvas"/>'
             )
         else:
-            bg_rect = '<rect width="100%" height="100%" class="bg-canvas"/>'
+            bg_rect = f'<rect width="100%" height="100%" fill="{conf["bg_color"]}" stroke="none" class="bg-canvas"/>'
     else:
-        bg_rect = '<rect width="100%" height="100%" class="bg-canvas"/>'
+        bg_rect = f'<rect width="100%" height="100%" fill="{conf["bg_color"]}" stroke="none" class="bg-canvas"/>'
 
     # Replace existing <style> block if present (svgbob), otherwise insert cleanly
     # immediately AFTER the opening <svg ...> tag (fixes aafigure XML error).
@@ -287,11 +392,14 @@ def diagram_to_svg(
     stroke_width: float = 2.0,
     font_size: int = 14,
     font_family: Optional[str] = None,
+    repair_alignment: bool = True,
 ) -> str:
     """
     High-level entry point to convert an ASCII or Unicode diagram into a fully styled SVG.
     """
-    normalized_text = _normalize_diagram_text(text)
+    normalized_text = _normalize_diagram_text(text, repair_alignment=repair_alignment)
+    if not normalized_text.strip():
+        normalized_text = " "
 
     selected_engine = engine
     if selected_engine == "auto":

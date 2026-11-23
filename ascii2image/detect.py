@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Tuple
 
+from .normalize import sanitize_ascii_text
+
 
 CategoryType = Literal["diagram", "art"]
 SubtypeType = Literal["diagram:box", "diagram:unicode", "art:tone", "art:line", "art:block"]
@@ -28,8 +30,11 @@ class DetectionResult:
 
 
 # Standard character sets
-UNICODE_BOX_CORNERS = set("┌┐└┘├┤┬┴┼╔╗╚╝╠╣╦╩╬")
-UNICODE_BOX_LINES = set("─│═║┄┆┈┊")
+UNICODE_BOX_CORNERS = set(
+    "┌┐└┘├┤┬┴┼╔╗╚╝╠╣╦╩╬┏┓┗┛┣┫┳┻╋╭╮╰╯"
+    "╒╓╕╖╘╙╛╜╞╟╡╢╤╥╧╨╪╫┍┎┑┒┕┖┙┚┝┞┟┠┡┢┥┦┧┨┩┪┭┮┯┰┱┲┵┶┷┸┹┺┽┾┿╀╁╂╃╄╅╆╇╈╉╊"
+)
+UNICODE_BOX_LINES = set("─━│┃═║┄┅┆┇┈┉┊┋")
 ASCII_BOX_CORNERS = set("+.#'*")
 ASCII_HORIZ_LINES = set("-=_~")
 ASCII_VERT_LINES = set("|!")
@@ -104,7 +109,8 @@ def _calculate_arrow_score(text: str) -> Tuple[float, int]:
         r"-->", r"<--", r"==>", r"<==", r"<->", r"->>", r"<<-",
         r"(?<=[-|\s])->(?=[a-zA-Z0-9_\s])",
         r"(?<=[a-zA-Z0-9_\s])<-(?=[-|\s])",
-        r"\^[\s]*\|", r"\|[\s]*v"
+        r"\^[\s]*\|", r"\|[\s]*v",
+        r"[▶►→⟶⇒➔➜➡◀◄←⟵⇐⬅▲↑⇑⬇▼↓⇓↔⇔]",
     ]
     total_arrows = 0
     for pat in patterns:
@@ -123,13 +129,13 @@ def _calculate_orthogonal_runs(grid: List[str], h: int, w: int) -> float:
     horiz_chars = 0
     for r in range(h):
         line = grid[r]
-        for match in re.finditer(r"([-=_~─═]{3,})", line):
+        for match in re.finditer(r"([-=_~─━═┄┅┈┉]{3,})", line):
             horiz_chars += len(match.group(1))
 
     vert_chars = 0
     for c in range(w):
         col_str = "".join(grid[r][c] for r in range(h))
-        for match in re.finditer(r"([|!│║]{2,})", col_str):
+        for match in re.finditer(r"([|!│┃║┆┇┊┋]{2,})", col_str):
             vert_chars += len(match.group(1))
 
     total_non_space = sum(1 for r in range(h) for c in range(w) if grid[r][c] != " ")
@@ -146,7 +152,7 @@ def _calculate_enclosed_labels(text: str) -> Tuple[float, int]:
         r"\|\s*([A-Za-z0-9_]*[A-Za-z0-9]{2,}[A-Za-z0-9_]*(?:\s+[A-Za-z0-9_]+)*)\s*\|",
         r"\[\s*([A-Za-z0-9_]*[A-Za-z0-9]{2,}[A-Za-z0-9_]*(?:\s+[A-Za-z0-9_]+)*)\s*\]",
         r"\(\s*([A-Za-z0-9_]*[A-Za-z0-9]{2,}[A-Za-z0-9_]*(?:\s+[A-Za-z0-9_]+)*)\s*\)",
-        r"│\s*([A-Za-z0-9_]*[A-Za-z0-9]{2,}[A-Za-z0-9_]*(?:\s+[A-Za-z0-9_]+)*)\s*│",
+        r"[│┃║]\s*([A-Za-z0-9_]*[A-Za-z0-9]{2,}[A-Za-z0-9_]*(?:\s+[A-Za-z0-9_]+)*)\s*[│┃║]",
     ]
     total_labels = 0
     for pat in patterns:
@@ -193,14 +199,9 @@ def classify_ascii(text: str) -> DetectionResult:
     Evaluates 6 topological and statistical features to accurately classify
     ASCII input as an engineering diagram or aesthetic art.
     """
-    cleaned = _ANSI_RE.sub("", text)
-    raw_lines = [l.rstrip("\r\n").expandtabs(4) for l in cleaned.splitlines()]
-    text = "\n".join(raw_lines)
-    # Remove leading and trailing completely blank lines
-    while raw_lines and not raw_lines[0].strip():
-        raw_lines.pop(0)
-    while raw_lines and not raw_lines[-1].strip():
-        raw_lines.pop()
+    cleaned, _ = sanitize_ascii_text(text, repair_alignment=True, strip_blank_edges=True)
+    raw_lines = cleaned.split("\n") if cleaned else []
+    text = cleaned
 
     if not raw_lines:
         return DetectionResult(

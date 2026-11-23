@@ -9,6 +9,8 @@ and eigenvalue decomposition for directional anisotropy.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -19,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 DEFAULT_FONT_CANDIDATES = [
     r"C:\Windows\Fonts\consola.ttf",   # Consolas (Windows default monospace)
+    r"C:\Windows\Fonts\CascadiaMono.ttf",
     r"C:\Windows\Fonts\cour.ttf",      # Courier New
     r"C:\Windows\Fonts\lucon.ttf",     # Lucida Console
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
@@ -39,6 +42,23 @@ def resolve_monospace_font(preferred_path: Optional[str] = None) -> str:
     for candidate in DEFAULT_FONT_CANDIDATES:
         if os.path.isfile(candidate):
             return candidate
+
+    # POSIX fallback via fontconfig (e.g. Linux / Streamlit Cloud containers)
+    if os.name == "posix":
+        try:
+            fc_match = shutil.which("fc-match")
+            if fc_match:
+                proc = subprocess.run(
+                    [fc_match, "-f", "%{file}", "monospace"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                found = proc.stdout.strip()
+                if found and os.path.isfile(found):
+                    return found
+        except Exception:
+            pass
 
     # Return empty string if no system font file found (will trigger fallback)
     return ""
