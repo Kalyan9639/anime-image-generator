@@ -192,6 +192,39 @@ def build_parser():
         action="store_true",
         help="Print diagnostic detection scores and font metrics."
     )
+    parser.add_argument(
+        "--scene-prompt",
+        type=str,
+        default=None,
+        help="Track 1 Scene Studio: natural-language prompt sent to LLM planner (Groq openai/gpt-oss-20b or Ollama) + dynamic math engine."
+    )
+    parser.add_argument(
+        "--scene-size",
+        type=str,
+        default="640x480",
+        help="Output WxH resolution for Scene Studio renders (default: 640x480)."
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        choices=["groq", "ollama"],
+        default=None,
+        help="LLM provider for Scene Studio (default from .env, or 'groq')."
+    )
+    parser.add_argument(
+        "--llm-host", "--ollama-host",
+        dest="llm_host",
+        type=str,
+        default=None,
+        help="Override LLM API host (default from .env)."
+    )
+    parser.add_argument(
+        "--llm-model", "--ollama-model",
+        dest="llm_model",
+        type=str,
+        default=None,
+        help="Override LLM model (default from .env, e.g. openai/gpt-oss-20b)."
+    )
     return parser
 
 
@@ -204,6 +237,48 @@ def main():
         sys.exit(0)
 
     args = parser.parse_args()
+
+    # Track 1 Scene Studio CLI mode (--scene-prompt)
+    if args.scene_prompt:
+        from ascii2image.semantic import plan_scene, render_scene_graph
+
+        ascii_layout_text = ""
+        stem = "scene_studio"
+        if args.input and Path(args.input).is_file():
+            ascii_layout_text = Path(args.input).read_text(encoding="utf-8", errors="replace")
+            stem = Path(args.input).stem + "_scene"
+
+        try:
+            w_str, h_str = args.scene_size.lower().split("x", 1)
+            rw, rh = max(160, int(w_str)), max(120, int(h_str))
+        except Exception:
+            rw, rh = 640, 480
+
+        out_dir = Path(args.outdir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        plan_res = plan_scene(
+            args.scene_prompt,
+            ascii_text=ascii_layout_text,
+            provider=args.provider,
+            host=args.llm_host,
+            model=args.llm_model,
+            allow_fallback=True,
+        )
+        out = render_scene_graph(plan_res.scene, width=rw, height=rh, include_svg=True)
+        png_file = out_dir / f"{stem}.png"
+        svg_file = out_dir / f"{stem}.svg"
+        json_file = out_dir / f"{stem}.json"
+        png_file.write_bytes(out.png_bytes)
+        svg_file.write_text(out.svg_content, encoding="utf-8")
+        json_file.write_text(__import__("json").dumps(plan_res.scene.to_dict(), indent=2), encoding="utf-8")
+        print(f"Scene Studio ({plan_res.source} / {plan_res.model_used}) rendered in {out.render_seconds:.2f}s:")
+        for w in plan_res.warnings:
+            print(f"  [Warning] {w}")
+        print(f"  -> {png_file}")
+        print(f"  -> {svg_file}")
+        print(f"  -> {json_file}")
+        return
 
     if not args.input or args.input.lower() == "help":
         print(HELP_BANNER)

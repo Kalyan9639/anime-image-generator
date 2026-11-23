@@ -18,6 +18,7 @@ from .art import (
     vectorize_line_art_svg,
 )
 from .export import svg_to_png
+from . import semantic
 
 __all__ = [
     "classify_ascii",
@@ -35,4 +36,5 @@ __all__ = [
     "reconstruct_art_photo",
     "vectorize_line_art_svg",
     "svg_to_png",
+    "semantic",
 ]
