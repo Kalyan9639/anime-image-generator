@@ -84,3 +84,57 @@ def test_unicode_diagram_to_svg_and_png():
         png_bytes = svg_to_png(svg, scale=2.0)
         assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
         assert len(png_bytes) > 300
+
+
+def test_svgbob_no_backdrop_border_and_solid_arrows():
+    """svgbob output must strip the inner backdrop rect so no outer black border appears."""
+    svg = diagram_to_svg(SAMPLE_DIAGRAM, engine="svgbob", theme="light")
+    assert 'class="backdrop"' not in svg
+    assert 'class="bg-canvas"' in svg
+    # Ensure svgbob actually ran (produces <rect ... rx="0"> or <defs>) rather than silently failing
+    assert "<defs>" in svg or "svgbob" in svg or "rx=" in svg
+    ET.fromstring(svg)
+
+
+def test_aafigure_preserves_double_letters_and_rounded_boxes():
+    """aafigure must keep words like Process, Haskell, Passing intact and handle .---. boxes."""
+    cc_text = (SAMPLES_DIR / "cc_diag.txt").read_text(encoding="utf-8")
+    svg_cc = diagram_to_svg(cc_text, engine="aafigure", theme="light")
+    assert "Process 1" in svg_cc
+    assert "Haskell" in svg_cc
+    assert "Passing" in svg_cc
+    ET.fromstring(svg_cc)
+
+    net_text = (SAMPLES_DIR / "network.txt").read_text(encoding="utf-8")
+    svg_net = diagram_to_svg(net_text, engine="aafigure", theme="light")
+    assert "Gateway Router" in svg_net
+    assert "Core Switch" in svg_net
+    # Rounded box borders must be converted to vector lines, not literal ASCII dashes
+    assert "------------" not in svg_net
+    ET.fromstring(svg_net)
+
+
+def test_misaligned_top_border_auto_repaired_in_svg():
+    """Missing Line-1 spaces from drag-select copy-paste must align with the box walls below."""
+    misaligned = (
+        "+---------------+\n"
+        "                | Core Switches |\n"
+        "                +---------------+"
+    )
+    svg = diagram_to_svg(misaligned, engine="svgbob", theme="light")
+    root = ET.fromstring(svg)
+    assert "svg" in root.tag
+    # When properly aligned, svgbob merges the 4 sides into a single <rect> (no orphan line at x1=4)
+    assert 'x1="4"' not in svg
+    png_bytes = svg_to_png(svg, scale=2.0)
+    assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_heavy_and_rounded_unicode_boxes():
+    heavy = "┏━━━━━━━━━┓     ┏━━━━━━━━━┓\n┃ Alpha   ┃ ──▶ ┃ Beta    ┃\n┗━━━━━━━━━┛     ┗━━━━━━━━━┛"
+    for engine in ("svgbob", "aafigure"):
+        svg = diagram_to_svg(heavy, engine=engine, theme="dark")
+        ET.fromstring(svg)
+        png = svg_to_png(svg, scale=2.0)
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+

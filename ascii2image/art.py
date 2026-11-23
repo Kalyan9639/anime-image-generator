@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import html
 import io
-import re
+import math
 from typing import List, Literal, Optional, Tuple
 
 import cv2
@@ -21,9 +21,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .ink import get_photometric_atlas, resolve_monospace_font
-
-
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+from .normalize import sanitize_ascii_text
 
 
 ThemeType = Literal["light", "dark", "terminal_green", "amber", "blueprint"]
@@ -39,19 +37,20 @@ ART_PALETTES = {
 }
 
 
-def _split_and_pad(text: str) -> Tuple[List[str], int, int]:
-    """Sanitizes ANSI codes/tabs, splits, and right-pads ASCII lines to a uniform rectangle."""
-    cleaned = _ANSI_RE.sub("", text)
-    lines = [l.rstrip("\r\n").expandtabs(4) for l in cleaned.splitlines()]
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
+def _split_and_pad(text: str, repair_alignment: bool = True) -> Tuple[List[str], int, int]:
+    """Sanitizes ANSI/Unicode spaces/tabs/fences, splits, and right-pads ASCII lines to a uniform rectangle."""
+    cleaned, _ = sanitize_ascii_text(
+        text,
+        tab_size=4,
+        repair_alignment=repair_alignment,
+        strip_blank_edges=True,
+    )
+    lines = cleaned.split("\n") if cleaned else []
 
     if not lines:
-        return [""], 1, 1
+        return [" "], 1, 1
 
-    max_w = max(len(l) for l in lines)
+    max_w = max(1, max(len(l) for l in lines))
     padded = [l.ljust(max_w) for l in lines]
     return padded, len(padded), max_w
 
@@ -59,22 +58,23 @@ def _split_and_pad(text: str) -> Tuple[List[str], int, int]:
 def render_art_crisp_svg(
     text: str,
     theme: ThemeType = "dark",
-    font_family: str = "Consolas, 'Courier New', monospace",
+    font_family: str = "Consolas, 'DejaVu Sans Mono', 'Courier New', monospace",
     font_size: int = 14,
-    line_spacing: float = 1.15
+    line_spacing: float = 1.15,
+    repair_alignment: bool = True,
 ) -> str:
     """
     Renders ASCII art as an infinitely scalable vector SVG with crisp typography
-    and exact monospace grid alignment.
+    and exact monospace grid alignment (preserving all leading & internal spaces).
     """
-    lines, h_chars, w_chars = _split_and_pad(text)
+    lines, h_chars, w_chars = _split_and_pad(text, repair_alignment=repair_alignment)
     palette = ART_PALETTES.get(theme, ART_PALETTES["dark"])
 
-    # Calculate exact viewBox dimensions based on monospace aspect ratio ~ 0.60
-    char_w_est = font_size * 0.602
+    # Calculate exact viewBox dimensions based on monospace aspect ratio ~ 0.62
+    char_w_est = font_size * 0.62
     line_h = font_size * line_spacing
-    total_w = int(round(w_chars * char_w_est + font_size * 2))
-    total_h = int(round(h_chars * line_h + font_size * 2))
+    total_w = max(32, int(math.ceil(w_chars * char_w_est + font_size * 2)))
+    total_h = max(32, int(math.ceil(h_chars * line_h + font_size * 2)))
 
     tspan_elements = []
     y_start = font_size + font_size * 0.85
@@ -82,7 +82,7 @@ def render_art_crisp_svg(
         y_pos = y_start + i * line_h
         escaped_line = html.escape(line)
         tspan_elements.append(
-            f'    <text x="{font_size}" y="{y_pos:.2f}">{escaped_line}</text>'
+            f'    <text x="{font_size}" y="{y_pos:.2f}" xml:space="preserve">{escaped_line}</text>'
         )
 
     tspan_block = "\n".join(tspan_elements)
@@ -96,10 +96,9 @@ def render_art_crisp_svg(
       font-size: {font_size}px;
       font-weight: 500;
       white-space: pre;
-      xml-space: preserve;
     }}
   </style>
-  <rect width="100%" height="100%" class="bg"/>
+  <rect width="100%" height="100%" fill="{palette["bg"]}" class="bg"/>
 {tspan_block}
 </svg>"""
     return svg
@@ -109,38 +108,44 @@ def render_art_crisp_png(
     text: str,
     theme: ThemeType = "dark",
     font_size: int = 18,
-    font_path: Optional[str] = None
+    font_path: Optional[str] = None,
+    scale: float = 1.0,
+    repair_alignment: bool = True,
 ) -> bytes:
     """
     Renders ASCII art into a high-resolution, anti-aliased raster PNG image.
     """
-    lines, h_chars, w_chars = _split_and_pad(text)
+    lines, h_chars, w_chars = _split_and_pad(text, repair_alignment=repair_alignment)
     palette = ART_PALETTES.get(theme, ART_PALETTES["dark"])
+
+    effective_font_size = max(10, min(72, int(round(font_size * max(0.5, float(scale))))))
 
     resolved_font = resolve_monospace_font(font_path)
     if resolved_font:
-        font = ImageFont.truetype(resolved_font, font_size)
+        font = ImageFont.truetype(resolved_font, effective_font_size)
     else:
         try:
-            font = ImageFont.load_default(size=font_size)
+            font = ImageFont.load_default(size=effective_font_size)
         except TypeError:
             font = ImageFont.load_default()
 
     try:
         ascent, descent = font.getmetrics()
-        line_h = ascent + abs(descent)
+        line_h = max(1, ascent + abs(descent))
     except Exception:
-        line_h = int(font_size * 1.2)
+        line_h = max(1, int(effective_font_size * 1.2))
 
     try:
-        char_w = int(round(font.getlength("M")))
+        char_w = font.getlength("M")
+        max_line_px = max((math.ceil(font.getlength(ln)) for ln in lines), default=int(math.ceil(char_w)))
     except Exception:
-        char_w = int(round(line_h * 0.55))
+        char_w = line_h * 0.58
+        max_line_px = int(math.ceil(w_chars * char_w))
 
-    pad_x = font_size
-    pad_y = font_size
-    img_w = w_chars * char_w + pad_x * 2
-    img_h = h_chars * line_h + pad_y * 2
+    pad_x = effective_font_size
+    pad_y = effective_font_size
+    img_w = max(32, max(int(math.ceil(w_chars * char_w)), max_line_px) + pad_x * 2)
+    img_h = max(32, h_chars * line_h + pad_y * 2)
 
     # Parse hex color into RGB tuples
     bg_hex = palette["bg"].lstrip("#")
@@ -227,8 +232,8 @@ def reconstruct_art_photo(
     # 3. Exact Font-Metric Aspect-Ratio Resampling
     # Monospace characters are taller than wide: aspect_ratio = cell_h / cell_w
     aspect = atlas.aspect_ratio
-    target_w = max(100, int(target_width))
-    target_h = max(100, int(round(target_w * (h_chars * aspect) / max(1, w_chars))))
+    target_w = max(100, min(4000, int(target_width)))
+    target_h = max(100, min(4000, int(round(target_w * (h_chars * aspect) / max(1, w_chars)))))
 
     # Lanczos-4 interpolation for optimal high-frequency reconstruction
     upsampled = cv2.resize(luminance_norm, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
@@ -288,8 +293,8 @@ def vectorize_line_art_svg(
     subcell = atlas.build_subcell_grid(lines, use_effective=False)
     aspect = atlas.aspect_ratio
 
-    target_w = max(400, w_chars * 16)
-    target_h = int(round(target_w * (h_chars * aspect) / max(1, w_chars)))
+    target_w = max(400, min(4096, w_chars * 16))
+    target_h = max(64, min(4096, int(round(target_w * (h_chars * aspect) / max(1, w_chars)))))
 
     # Resample to intermediate tracing canvas
     raster = cv2.resize(subcell, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)

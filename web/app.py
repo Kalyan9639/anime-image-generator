@@ -103,12 +103,15 @@ def convert_ascii():
     if effective_theme == "auto":
         effective_theme = "light" if effective_mode == "diagram" else "dark"
 
+    diagram_theme = effective_theme if effective_theme in ("light", "dark", "blueprint", "tinted") else "light"
+    art_theme = "light" if effective_theme == "tinted" else effective_theme
+
     svg_content = None
     png_bytes = None
 
     try:
         if effective_mode == "diagram":
-            svg_content = diagram_to_svg(text, engine=engine, theme=effective_theme)
+            svg_content = diagram_to_svg(text, engine=engine, theme=diagram_theme)
             png_bytes = svg_to_png(svg_content, scale=scale)
 
         elif effective_mode == "art:reconstruct":
@@ -123,15 +126,15 @@ def convert_ascii():
             if is_success:
                 png_bytes = buffer.tobytes()
             # Also generate vector crisp SVG
-            svg_content = render_art_crisp_svg(text, theme=effective_theme)
+            svg_content = render_art_crisp_svg(text, theme=art_theme)
 
         elif effective_mode == "art:vector":
-            svg_content = vectorize_line_art_svg(text, theme=effective_theme)
+            svg_content = vectorize_line_art_svg(text, theme=art_theme)
             png_bytes = svg_to_png(svg_content, scale=scale)
 
         else:  # art:crisp
-            svg_content = render_art_crisp_svg(text, theme=effective_theme)
-            png_bytes = render_art_crisp_png(text, theme=effective_theme)
+            svg_content = render_art_crisp_svg(text, theme=art_theme)
+            png_bytes = render_art_crisp_png(text, theme=art_theme, scale=scale)
 
         png_b64 = base64.b64encode(png_bytes).decode("ascii") if png_bytes else ""
 
@@ -175,19 +178,27 @@ def download_image(file_type):
     detection = classify_ascii(text)
     effective_mode = mode
     if effective_mode == "auto":
-        effective_mode = "diagram" if detection.category == "diagram" else "art:crisp"
+        if detection.category == "diagram":
+            effective_mode = "diagram"
+        elif detection.subtype == "art:tone":
+            effective_mode = "art:reconstruct"
+        else:
+            effective_mode = "art:crisp"
 
     effective_theme = theme
     if effective_theme == "auto":
         effective_theme = "light" if effective_mode == "diagram" else "dark"
 
+    diagram_theme = effective_theme if effective_theme in ("light", "dark", "blueprint", "tinted") else "light"
+    art_theme = "light" if effective_theme == "tinted" else effective_theme
+
     if file_type == "svg":
         if effective_mode == "diagram":
-            svg = diagram_to_svg(text, engine=engine, theme=effective_theme)
+            svg = diagram_to_svg(text, engine=engine, theme=diagram_theme)
         elif effective_mode == "art:vector":
-            svg = vectorize_line_art_svg(text, theme=effective_theme)
+            svg = vectorize_line_art_svg(text, theme=art_theme)
         else:
-            svg = render_art_crisp_svg(text, theme=effective_theme)
+            svg = render_art_crisp_svg(text, theme=art_theme)
 
         return send_file(
             io.BytesIO(svg.encode("utf-8")),
@@ -198,7 +209,7 @@ def download_image(file_type):
 
     elif file_type == "png":
         if effective_mode == "diagram":
-            svg = diagram_to_svg(text, engine=engine, theme=effective_theme)
+            svg = diagram_to_svg(text, engine=engine, theme=diagram_theme)
             png = svg_to_png(svg, scale=scale)
         elif effective_mode == "art:reconstruct":
             mat = reconstruct_art_photo(
@@ -211,10 +222,10 @@ def download_image(file_type):
             _, buf = cv2.imencode(".png", mat)
             png = buf.tobytes()
         elif effective_mode == "art:vector":
-            svg = vectorize_line_art_svg(text, theme=effective_theme)
+            svg = vectorize_line_art_svg(text, theme=art_theme)
             png = svg_to_png(svg, scale=scale)
         else:
-            png = render_art_crisp_png(text, theme=effective_theme)
+            png = render_art_crisp_png(text, theme=art_theme, scale=scale)
 
         return send_file(
             io.BytesIO(png),

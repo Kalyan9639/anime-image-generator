@@ -8,9 +8,11 @@ and vector graphics (zero AI).
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import io
 from pathlib import Path
-from typing import Dict
+from typing import Any, Callable, Dict
 
 import cv2
 from PIL import Image
@@ -20,15 +22,17 @@ from ascii2image import (
     classify_ascii,
     diagram_to_svg,
     get_available_engines,
+    reconstruct_art_photo,
     render_art_crisp_png,
     render_art_crisp_svg,
-    reconstruct_art_photo,
+    sanitize_ascii_text,
     svg_to_png,
     vectorize_line_art_svg,
 )
 
 ROOT_DIR = Path(__file__).resolve().parent
 SAMPLES_DIR = ROOT_DIR / "samples"
+FALLBACK_SAMPLE = "+-------+     +-------+\n| Input | --> | Image |\n+-------+     +-------+"
 
 st.set_page_config(
     page_title="ASCII → Image Generator",
@@ -37,14 +41,21 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Subtle styling for monospace input and clean metric cards
+# Monospace styling with white-space: pre and horizontal scrolling so wide ASCII
+# lines NEVER soft-wrap or become visually disoriented in the editor.
 st.markdown(
     """
     <style>
-    textarea {
-        font-family: "Consolas", "Courier New", monospace !important;
+    textarea,
+    [data-testid="stTextArea"] textarea {
+        font-family: "Consolas", "DejaVu Sans Mono", "Courier New", monospace !important;
         font-size: 13px !important;
         line-height: 1.35 !important;
+        white-space: pre !important;
+        overflow-wrap: normal !important;
+        word-wrap: normal !important;
+        overflow-x: auto !important;
+        tab-size: 4 !important;
     }
     .det-card {
         padding: 0.85rem 1rem;
@@ -69,6 +80,22 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def _stretch_kwargs(widget_fn: Callable[..., Any]) -> Dict[str, Any]:
+    """
+    Uses `width="stretch"` on Streamlit >= 1.49 (avoiding deprecation warnings)
+    and falls back to `use_container_width=True` on older Streamlit 1.32–1.48.
+    """
+    try:
+        params = inspect.signature(widget_fn).parameters
+        if "width" in params:
+            ver_parts = tuple(int(p) for p in st.__version__.split(".")[:2] if p.isdigit())
+            if ver_parts >= (1, 49):
+                return {"width": "stretch"}
+    except Exception:
+        pass
+    return {"use_container_width": True}
 
 
 @st.cache_data
@@ -101,13 +128,60 @@ def resolve_effective_theme(theme: str, effective_mode: str) -> str:
     return "light" if effective_mode == "diagram" else "dark"
 
 
+def _on_sample_change(samples: Dict[str, str]) -> None:
+    chosen = st.session_state.get("sample_selector", "Custom Input")
+    if chosen == "Custom Input":
+        st.session_state["ascii_text"] = ""
+    elif chosen in samples:
+        st.session_state["ascii_text"] = samples[chosen]
+
+
+def _on_text_change(samples: Dict[str, str]) -> None:
+    current = st.session_state.get("ascii_text", "")
+    chosen = st.session_state.get("sample_selector", "Custom Input")
+    if chosen != "Custom Input" and samples.get(chosen) != current:
+        st.session_state["sample_selector"] = "Custom Input"
+
+
+def _on_clear() -> None:
+    st.session_state["ascii_text"] = ""
+    st.session_state["sample_selector"] = "Custom Input"
+    st.session_state["last_upload_hash"] = None
+
+
+def _on_fix_alignment() -> None:
+    current = st.session_state.get("ascii_text", "")
+    cleaned, _ = sanitize_ascii_text(current, repair_alignment=True, strip_blank_edges=True)
+    st.session_state["ascii_text"] = cleaned
+
+
+def _on_file_upload() -> None:
+    uploaded = st.session_state.get("ascii_uploader")
+    if uploaded is None:
+        st.session_state["last_upload_hash"] = None
+        return
+    raw_bytes = uploaded.getvalue()
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
+    if st.session_state.get("last_upload_hash") != content_hash:
+        st.session_state["ascii_text"] = raw_bytes.decode("utf-8", errors="replace")
+        st.session_state["sample_selector"] = "Custom Input"
+        st.session_state["last_upload_hash"] = content_hash
+
+
 def main() -> None:
     samples = load_samples()
     default_sample_name = "Flowchart" if "Flowchart" in samples else (next(iter(samples), None))
-    default_text = samples.get(default_sample_name, "+-------+     +-------+\n| Input | --> | Image |\n+-------+     +-------+")
+    default_text = samples.get(default_sample_name, FALLBACK_SAMPLE)
+    sample_options = ["Custom Input"] + list(samples.keys())
 
+    if "sample_selector" not in st.session_state:
+        st.session_state["sample_selector"] = (
+            default_sample_name if default_sample_name in sample_options else "Custom Input"
+        )
     if "ascii_text" not in st.session_state:
         st.session_state["ascii_text"] = default_text
+    if "last_upload_hash" not in st.session_state:
+        st.session_state["last_upload_hash"] = None
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.title("▦ ASCII → Image Generator")
@@ -120,21 +194,21 @@ def main() -> None:
     with st.sidebar:
         st.header("⚙️ Settings")
 
-        # Sample selector
-        sample_options = ["Custom Input"] + list(samples.keys())
-        default_idx = sample_options.index(default_sample_name) if default_sample_name in sample_options else 0
-        selected_sample = st.selectbox("Load Built-in Sample", sample_options, index=default_idx)
+        st.selectbox(
+            "Load Built-in Sample",
+            options=sample_options,
+            key="sample_selector",
+            on_change=_on_sample_change,
+            args=(samples,),
+            help="Select a built-in example, or choose 'Custom Input' for a blank canvas.",
+        )
 
-        if selected_sample != "Custom Input" and st.session_state.get("last_sample") != selected_sample:
-            st.session_state["ascii_text"] = samples[selected_sample]
-            st.session_state["last_sample"] = selected_sample
-
-        uploaded_file = st.file_uploader("Or upload a .txt file", type=["txt", "bob", "asc"])
-        if uploaded_file is not None:
-            file_id = f"{uploaded_file.name}:{uploaded_file.size}"
-            if st.session_state.get("last_upload") != file_id:
-                st.session_state["ascii_text"] = uploaded_file.read().decode("utf-8", errors="replace")
-                st.session_state["last_upload"] = file_id
+        st.file_uploader(
+            "Or upload a .txt file",
+            type=["txt", "bob", "asc"],
+            key="ascii_uploader",
+            on_change=_on_file_upload,
+        )
 
         st.divider()
 
@@ -178,6 +252,15 @@ def main() -> None:
         available_engines = get_available_engines()
         engine = st.selectbox("Diagram Engine", options=["auto"] + available_engines, index=0)
 
+        auto_repair = st.checkbox(
+            "Auto-repair pasted alignment",
+            value=True,
+            help=(
+                "Automatically cleans Unicode spaces/tabs, unwraps Markdown ``` code fences, "
+                "and repairs missing Line-1 indentation from drag-select copy-paste."
+            ),
+        )
+
         with st.expander("Photo Reconstruction Tuning", expanded=False):
             target_width = st.slider("Target Width (px)", min_value=400, max_value=2000, value=1200, step=100)
             denoise = st.slider("Denoise Smoothing", min_value=0.2, max_value=2.5, value=1.0, step=0.1)
@@ -194,13 +277,58 @@ def main() -> None:
             key="ascii_text",
             height=360,
             label_visibility="collapsed",
+            placeholder="Paste your ASCII diagram or ASCII art here, then click 'Generate Image' (or press Ctrl+Enter)...",
+            on_change=_on_text_change,
+            args=(samples,),
         )
 
+        # Explicit action buttons so pasting new ASCII ALWAYS has an immediate trigger
+        act_col1, act_col2, act_col3 = st.columns([2, 1, 1])
+        with act_col1:
+            st.button(
+                "⚡ Generate Image",
+                type="primary",
+                **_stretch_kwargs(st.button),
+                help="Apply any newly pasted ASCII text and render the image.",
+            )
+        with act_col2:
+            st.button(
+                "🔧 Fix Align",
+                on_click=_on_fix_alignment,
+                **_stretch_kwargs(st.button),
+                help="Normalize tabs/spaces, unwrap code fences, and fix misaligned Line-1 indent in the editor.",
+            )
+        with act_col3:
+            st.button(
+                "🧹 Clear",
+                on_click=_on_clear,
+                **_stretch_kwargs(st.button),
+                help="Clear the input box to paste fresh ASCII.",
+            )
+
         if not ascii_text.strip():
-            st.info("Paste ASCII text above or choose a sample from the sidebar to begin.")
+            st.info("Paste ASCII text above (and click **Generate Image** or press **Ctrl+Enter**), or load a sample from the sidebar.")
+            with col_out:
+                st.subheader("2. Converted Output")
+                st.info("Your generated SVG & PNG preview will appear here once you paste ASCII text or select a sample.")
             return
 
-        detection = classify_ascii(ascii_text)
+        effective_text, repair_notes = sanitize_ascii_text(
+            ascii_text,
+            repair_alignment=auto_repair,
+            strip_blank_edges=True,
+        )
+        if not effective_text.strip():
+            st.info("Paste ASCII text above to generate an image.")
+            with col_out:
+                st.subheader("2. Converted Output")
+                st.info("Your generated SVG & PNG preview will appear here.")
+            return
+
+        if repair_notes:
+            st.info("🔧 " + " ".join(repair_notes))
+
+        detection = classify_ascii(effective_text)
         badge_cls = "badge-diagram" if detection.category == "diagram" else "badge-art"
         st.markdown(
             f"""
@@ -240,11 +368,16 @@ def main() -> None:
         try:
             with st.spinner("Rendering..."):
                 if effective_mode == "diagram":
-                    svg_content = diagram_to_svg(ascii_text, engine=engine, theme=diagram_theme)
+                    svg_content = diagram_to_svg(
+                        effective_text,
+                        engine=engine,
+                        theme=diagram_theme,
+                        repair_alignment=auto_repair,
+                    )
                     png_bytes = svg_to_png(svg_content, scale=scale)
                 elif effective_mode == "art:reconstruct":
                     mat = reconstruct_art_photo(
-                        ascii_text,
+                        effective_text,
                         target_width=target_width,
                         invert=invert,
                         denoise_strength=denoise,
@@ -253,13 +386,26 @@ def main() -> None:
                     ok, buf = cv2.imencode(".png", mat)
                     if ok:
                         png_bytes = buf.tobytes()
-                    svg_content = render_art_crisp_svg(ascii_text, theme=art_theme)
+                    svg_content = render_art_crisp_svg(
+                        effective_text,
+                        theme=art_theme,
+                        repair_alignment=auto_repair,
+                    )
                 elif effective_mode == "art:vector":
-                    svg_content = vectorize_line_art_svg(ascii_text, theme=art_theme)
+                    svg_content = vectorize_line_art_svg(effective_text, theme=art_theme)
                     png_bytes = svg_to_png(svg_content, scale=scale)
                 else:  # art:crisp
-                    svg_content = render_art_crisp_svg(ascii_text, theme=art_theme)
-                    png_bytes = render_art_crisp_png(ascii_text, theme=art_theme)
+                    svg_content = render_art_crisp_svg(
+                        effective_text,
+                        theme=art_theme,
+                        repair_alignment=auto_repair,
+                    )
+                    png_bytes = render_art_crisp_png(
+                        effective_text,
+                        theme=art_theme,
+                        scale=scale,
+                        repair_alignment=auto_repair,
+                    )
 
             # Action bar: Download buttons
             dl_col1, dl_col2 = st.columns(2)
@@ -270,8 +416,8 @@ def main() -> None:
                         data=png_bytes,
                         file_name="ascii_output.png",
                         mime="image/png",
-                        use_container_width=True,
                         type="primary",
+                        **_stretch_kwargs(st.download_button),
                     )
             with dl_col2:
                 if svg_content:
@@ -280,19 +426,21 @@ def main() -> None:
                         data=svg_content,
                         file_name="ascii_output.svg",
                         mime="image/svg+xml",
-                        use_container_width=True,
+                        **_stretch_kwargs(st.download_button),
                     )
 
             tab_img, tab_svg = st.tabs(["🖼️ Image Preview", "📐 SVG Source"])
 
             with tab_img:
                 if png_bytes:
-                    st.image(png_bytes, use_container_width=True)
+                    st.image(png_bytes, **_stretch_kwargs(st.image))
                     pil_img = Image.open(io.BytesIO(png_bytes))
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Dimensions", f"{pil_img.width} × {pil_img.height} px")
                     m2.metric("PNG Size", f"{len(png_bytes) / 1024:.1f} KB")
                     m3.metric("Render Mode", f"{effective_mode} ({effective_theme})")
+                else:
+                    st.error("Image rendering returned empty output. Try switching Conversion Mode or Diagram Engine.")
 
             with tab_svg:
                 if svg_content:

@@ -17,7 +17,7 @@ from .ink import resolve_monospace_font
 
 def extract_svg_background(svg_string: str) -> Optional[str]:
     """Attempts to discover background color from <rect class="bg-canvas" fill="..."> or style."""
-    match = re.search(r'rect\.(?:bg-canvas|bg)\s*\{\s*fill:\s*([^;!]+)', svg_string)
+    match = re.search(r'rect\.(?:bg-canvas|bg)[^{]*\{\s*fill:\s*([^;!]+)', svg_string)
     if match:
         return match.group(1).strip()
     match_attr = re.search(r'<rect[^>]+fill="([^"]+)"[^>]*class="(?:bg-canvas|bg)"', svg_string)

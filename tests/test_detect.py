@@ -137,3 +137,15 @@ def test_ansi_codes_stripped_before_detection():
     assert res.category == "diagram"
     assert res.subtype == "diagram:box"
     assert res.confidence >= 0.70
+
+
+def test_heavy_unicode_box_detection():
+    heavy = """
+┏━━━━━━━━━━┓     ┏━━━━━━━━━━┓
+┃  Alpha   ┃ ──▶ ┃   Beta   ┃
+┗━━━━━━━━━━┛     ┗━━━━━━━━━━┛
+"""
+    res = classify_ascii(heavy)
+    assert res.category == "diagram"
+    assert res.subtype == "diagram:unicode"
+    assert res.confidence >= 0.70
