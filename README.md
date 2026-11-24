@@ -1,392 +1,211 @@
-# ASCII to Image Generator (`ascii2image`)
+# PrismStudio
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/Tests-26%20Passed-brightgreen.svg)]()
-[![Zero AI](https://img.shields.io/badge/Engine-Zero%20AI%20%2F%20Pure%20Math-orange.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-15%20Passed-brightgreen.svg)]()
+[![GPU Renderer](https://img.shields.io/badge/Renderer-ModernGL%20OpenGL%203.3%2B-cyan.svg)]()
+[![CPU Fallback](https://img.shields.io/badge/CPU%20Fallback-Numba%20%2B%20NumPy-orange.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-green.svg)]()
 
-A pure-code, mathematical signal-processing and computer-graphics tool to convert **ASCII diagrams** and **ASCII art pictures** into high-quality **SVG** (infinitely scalable vector graphics) and **PNG** (high-resolution raster images).
+**PrismStudio** is a standalone pure-mathematical natural-language-to-image synthesis engine with **zero `ascii2image` code/imports** and **zero neural pixel diffusion**.
 
-> **Zero AI Image Generators:** Operates 100% locally on your computer with zero neural network hallucination. Built purely on topological grammar parsing, fixed-cell photometric font calibration, structure-tensor eigenvalue analysis, non-linear edge-preserving bilateral filtering, and high-DPI vector rasterization.
-
----
-
-## Table of Contents
-
-- [Capabilities Overview](#capabilities-overview)
-- [How It Minimizes Loss (Mathematical Concepts)](#how-it-minimizes-loss-mathematical-concepts)
-- [Visual Examples](#visual-examples)
-  - [Example 1: Software Architecture Diagram](#example-1-software-architecture-diagram)
-  - [Example 2: Landscape & Scene Art](#example-2-landscape--scene-art)
-  - [Example 3: Continuous-Tone Photographic Shading](#example-3-continuous-tone-photographic-shading)
-  - [Example 4: Line-Art Cartoon Sketch](#example-4-line-art-cartoon-sketch)
-- [Quick Start](#quick-start)
-  - [CLI Command-Line Interface](#1-using-the-command-line-interface-clipy)
-  - [Interactive Web Dashboard](#2-using-the-interactive-local-web-app)
-- [Python Library API](#python-library-api)
-- [Theme Palette Reference](#theme-palette-reference)
-- [Project Architecture](#project-architecture)
-- [Running Automated Tests](#running-automated-tests)
+Instead of stitching disconnected primitives or hallucinating raster pixels, an LLM Scene Director compiles natural language into a compositional `SceneDNA` blueprint — driving swept Bézier super-splines with continuous Bishop frames, Spherical Harmonics ($L \le 3$) asymmetric heads, $C^2$ cubic `smin`/`smax` anatomical joints, Body-UV garment shells, and 3-zone cinematic lighting rendered on GPU (`ModernGL` OpenGL 3.3+) or an explicit-notify multi-core CPU fallback (`Numba` + `NumPy`).
 
 ---
 
-## Capabilities Overview
+## Visual Showcases (`960×720`)
 
-| ASCII Input Type | Sub-Type | Output Modes Provided |
-|---|---|---|
-| **ASCII Diagram** | Flowcharts (`+---+`), architecture blocks, network topologies (`.---.`), sequence flows, tables | **Vector Diagram Mode:** True geometric SVG paths (boxes, smooth rounded corners, arrows, modern typography) + 2×/3× Retina PNG |
-| **ASCII Art (Tonal)** | Portraits, photographic halftones (`@#%*+=-:. `) | **5-Stage Mathematical Reconstruction:** Continuous-tone grayscale image via $8 \times 4$ sub-cell density integration, bilateral filtering, and CLAHE |
-| **ASCII Art (Line/Sketch)** | Cartoons, animal sketches (`/\_/\`), typography | **Crisp Monospace Mode** (exact vector text) or **Vector Contour Mode** (Bézier curves) |
-| **ASCII Art (Block)** | Unicode blocks (`█▀▄▌▐░▒▓`), Braille (`⠀-⣿`) | High-contrast geometric reconstruction and crisp typography |
-
----
-
-## How It Minimizes Loss (Mathematical Concepts)
-
-Turning discrete text characters back into an image is inherently ill-posed because ASCII throws away almost all microscopic pixel information. Naive scripts average each character into a single $1 \times 1$ pixel and apply a simple Gaussian blur, producing muddy, unrecognizable results.
-
-`ascii2image` minimizes information loss using **four mathematical frameworks**:
-
-### 1. $8 \times 4$ Sub-Cell Spatial Discretization (32 Samples/Character)
-Instead of collapsing each character into a single flat $1 \times 1$ pixel, each character is rendered onto a $4\times$ supersampled fixed-cell canvas (`cell_width` $\times$ `cell_height`, baseline-locked with `anchor="ls"`) and downsampled via exact area integration (`cv2.INTER_AREA`) into an **$8\text{-row} \times 4\text{-column}$ sub-cell spatial matrix**.
-- Preserves sub-character stroke locations:
-  - `^` ink is concentrated in the top $25\%$
-  - `.` and `_` ink sits strictly at the bottom
-  - `/` and `\` preserve diagonal slopes
-  - `▀` and `▄` occupy top and bottom halves
-
-### 2. Structure Tensor & Eigenvalue Anisotropy Analysis
-To prevent dense shading characters (`@`, `#`, `%`) from creating "screen-door" noise while keeping line strokes crisp, we calculate the $2 \times 2$ symmetric structure tensor using Sobel image gradients $\nabla I = (I_x, I_y)$:
-
-$$J = \begin{bmatrix} \langle I_x^2 \rangle & \langle I_x I_y \rangle \\ \langle I_x I_y \rangle & \langle I_y^2 \rangle \end{bmatrix}$$
-
-We solve for its eigenvalues $\lambda_1 \ge \lambda_2 \ge 0$ to calculate a directional coherence score $\alpha \in [0, 1]$:
-
-$$\alpha = \left(\frac{\lambda_1 - \lambda_2}{\lambda_1 + \lambda_2 + \epsilon}\right)^2$$
-
-- Directional characters (`/`, `\`, `|`, `-`) maintain their exact sub-cell stroke geometry.
-- Isotropic shading characters (`@`, `#`, `%`, `&`) are smoothly blended to prevent interior grid holes.
-
-### 3. Non-Linear Edge-Preserving Bilateral Filtering
-Standard linear filters blur across object boundaries, destroying silhouettes. The bilateral filter weights neighboring pixels simultaneously by **spatial Euclidean distance** $g_{\sigma_s}$ and **photometric luminance difference** $g_{\sigma_r}$:
-
-$$I_{\text{filtered}}(p) = \frac{1}{W_p} \sum_{q \in S} I(q) \, g_{\sigma_s}(\|p - q\|) \, g_{\sigma_r}(|I(q) - I(p)|)$$
-
-- Inside uniform character regions, $g_{\sigma_r} \approx 1$, mathematically dissolving the blocky character-grid seams.
-- Across sharp boundaries where character density jumps abruptly (e.g. an outline meeting the background), $g_{\sigma_r} \to 0$, keeping silhouettes and contours crisp.
-
-### 4. CLAHE (Contrast Limited Adaptive Histogram Equalization)
-Restores subtle local shading gradients without blowing out highlights or over-amplifying noise.
+| Showcase | Aesthetic Mode | Prompt Concept | Output |
+| :--- | :--- | :--- | :---: |
+| **Sunset Wall Cat** | `anime_npr` | Cute green-eyed orange tabby sitting on a high staggered brick wall at sunset with village bokeh | ![Cat Sunset Anime](out/showcases/showcase_1_cat_on_high_wall.png) |
+| **Sunset Wall Cat** | `stylized_pbr` | Same compositional rig rendered with GGX specular, wrap SSS, and soft plush fur rim shading | ![Cat Sunset PBR](out/showcases/showcase_1b_cat_pbr.png) |
+| **Anime Stage Singer** | `anime_npr` | Singing heroine with high ponytail, oversized indigo hoodie, tartan crimson skirt, handheld mic, piano, wooden stage & crowd bokeh | ![Anime Stage Singer](out/showcases/showcase_2_anime_stage_singer.png) |
+| **Four-Armed Elf** | `anime_npr` | Four-armed elf mystic with pointed ears (`ear_length`), emerald tunic, back-anchored teal cloak & glowing crystal staff | ![Four-Armed Elf](out/showcases/showcase_3_four_armed_elf.png) |
+| **XLR8 Wheel-Legs** | `anime_npr` | Futuristic alien speedster with `omit_bones` feet replaced by glowing ankle `wheel_assembly` hubs, brow visor crest & cyber skyline | ![XLR8 Speedster](out/showcases/showcase_4_xlr8_wheel_legs.png) |
 
 ---
 
-## Visual Examples
+## Core Capabilities
 
-### Example 1: Software Architecture Diagram
-**Input file:** `samples/cc_diag.txt`
-```text
-Cloud Node 1 (VM / Server)                   Cloud Node 2 (VM / Server)
-+------------------------------------------+   +------------------------------------------+
-|  [Process 1]              [Process 2]    |   |  [Process 3]              [Process 4]    |
-|       |                        |         |   |       ^                        |         |
-|       +-----------+------------+         |   |       |                        |         |
-|                   v                      |   |       |                        v         |
-|        Cloud Haskell Runtime &           |   |        Cloud Haskell Runtime &           |
-|        Network Transport Layer           |==>|        Network Transport Layer           |
-+------------------------------------------+   +------------------------------------------+
-                   Async Message Passing (No Shared Memory)
-```
+- **Dual Visual Modes:**
+  - `anime_npr`: Sharp silhouette-aware cel shading, warm coral SSS shadow-edge terminator, anisotropic dual-lobe Kajiya-Kay hair sheen, and rim-modulated Sobel ink outlines.
+  - `stylized_pbr`: Soft wrap SSS lighting, GGX microfacet specular highlights, metallic reflections, and velvety plush rim sheen.
+- **Compositional Bone-Graph Anatomy (Open-Ended Creativity):**
+  - 2-bone analytical Inverse Kinematics (IK) with quadruped (`quadruped`) and humanoid (`humanoid`) rigs connected via $C^2$ cubic smooth blending (`sminCubicMat`).
+  - Arbitrarily omit body parts (`omit_bones`, e.g., feet for wheel-legs), attach extra multi-bone limbs (`extra_limb_chains`, e.g., four arms, wings, tentacles), or mount sockets (`mechanical_attachments`: `wheel_assembly`, `visor_helmet`, `magic_staff`, `handheld_mic`).
+  - Pointed elf/animal ears, snouts, curls/tails, cranial $L \le 3$ Spherical Harmonics shaping, sculpted scalp caps & side bangs, and 2D analytical UV eyes (`anime_round`, `feline_slit`, `sharp_mystic`, `visor_glow`, `closed_happy`).
+- **Single-Pass Body-UV Garment Pattern Cutter:**
+  - Generates fitted or flared shells (`upper_torso`, `lower_skirt`, `full_dress`, `trousers`, `outer_coat`, `cloak`) seamlessly fused across shoulder and hip joints, with cosine pleats, hems, necklines, and 2D UV decals (`medical_cross`, `star_badge`, `safety_stripes`, `button_seam`, `lace_border`, `emblem_circle`).
+- **3-Zone Cinematic World & 6-Stage Optical Pass:**
+  - **Zone 1:** Staggered half-bond brick masonry with coping ledges & S-curve ivy, wooden stage decks, bounded-repetition piano keyboards, mossy stone outcrops, and trees snapped via topological DAG dependency solving (`on_top_of`, `beside`, `behind`).
+  - **Zone 2:** Analytical midground silhouettes (dusk village cottages, city skyline with lit windows, concert silhouettes, multi-lobe forest canopy).
+  - **Zone 3:** HDR sky dome, ground shadows, sun emitters, light-modulated ink outlines, foreground-protected Vogel disk DOF bokeh, radial god-rays, HDR bloom, chromatic aberration, ACES filmic tone mapping, and film grain.
+- **Explicit-Notify Dual Execution Engine:**
+  - **Primary:** Headless `ModernGL` OpenGL 3.3+ shaders packing the scene into a unified `RGBA32F` data texture atlas.
+  - **Fallback:** Multi-core tiled `@njit(parallel=True, cache=True)` Numba + vectorized NumPy renderer + OpenCV Sobel/Vogel optical compositor. Whenever OpenGL falls back to CPU (or CPU mode is chosen), `RenderOutput.backend_notice`, CLI `stderr`, `RuntimeWarning`, and the Streamlit banner explicitly inform the user.
 
-**Command:**
+---
+
+## Installation
+
 ```powershell
-python cli.py samples/cc_diag.txt -o out/
+# From the repository root or prism_studio/
+cd prism_studio
+pip install -r requirements.txt
+
+# Optional: editable install exposing the `prism-studio` console script
+pip install -e . --no-build-isolation
 ```
 
-**Console Output:**
-```
-========================================================
-  ASCII to Image Generator (ascii2image v1.0.0)
-========================================================
-Input:       cc_diag.txt (10 lines)
-Classified:  DIAGRAM [diagram:box] (95.6% confidence)
-Explanation: Detected diagram structure: 10 verified 90° box corner(s), 4 relational arrow vector(s), 50.1% orthogonal grid lines, 7 enclosed label(s).
---------------------------------------------------------
-Mode:        diagram
-Theme:       light
-Scale:       2.0x
---------------------------------------------------------
-Files successfully generated:
-  -> out/cc_diag_diagram.svg (5.3 KB)
-  -> out/cc_diag_diagram.png (26.7 KB)
-========================================================
-```
-* **Result:** Generates `cc_diag_diagram.svg` and `cc_diag_diagram.png` ($1472 \times 352\text{ px}$) with true closed rectangular boxes, routed arrow lines, and clean typography.
-
----
-
-### Example 2: Landscape & Scene Art
-**Input file:** `samples/house.txt`
-```text
-            /\                                   \ | /
-           /  \                                 -- O --
-          /    \                                 / | \
-         /      \
-        /        \
-       /          \
-      /            \
-     /______________\
-      | .--.  .--. |                  .@@@@.
-      | |  |  |  | |                .@@@@@@@@.
-      | '--'  '--' |               @@@@@@@@@@@@
-      |    ____    |               @@@@@@@@@@@@
-      |   |    |   |                '@@@@@@@@'
-      |   |  o |   |                   ||||
-      |___|____|___|                   ||||
-==========================================================
-```
-
-**Command:**
-```powershell
-python cli.py samples/house.txt -o out/
-```
-
-**Console Output:**
-```
-========================================================
-  ASCII to Image Generator (ascii2image v1.0.0)
-========================================================
-Input:       house.txt (16 lines)
-Classified:  ART [art:tone] (90.4% confidence)
-Explanation: ASCII art illustration/scene: contains drawn geometry (roof/windows) with 20.8% shading (e.g. foliage) and no relational arrows.
---------------------------------------------------------
-Mode:        art:tone
-Theme:       dark
-Scale:       2.0x
---------------------------------------------------------
-Files successfully generated:
-  -> out/house_reconstructed.png (120.5 KB)
-  -> out/house_crisp.svg (1.9 KB)
-========================================================
-```
-* **Result:** Automatically identifies the drawing as an art scene (due to high shading and zero relational arrows). Generates `house_reconstructed.png`, where the tree canopy is mathematically smoothed into a continuous foliage crown, the trunk is solid, the roof lines are crisp, and the sun radiates cleanly.
-
----
-
-### Example 3: Continuous-Tone Photographic Shading
-**Input file:** `samples/shading_bourke.txt` (Paul Bourke 70-character grayscale ramp)
-```text
-    $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$    
-  $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$  
- $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ 
-$$$$$$$$$$$$$$$$$$@@@@@@$$$$$$$$$$$$$$$$$$$$
-$$$$$$$$$$$$$$@@@@%%%%@@@@$$$$$$$$$$$$$$$$$$
-$$$$$$$$$$$$@@%%##****##%%@@$$$$$$$$$$$$$$$$
-$$$$$$$$$$@@%#**++====++*#%@@$$$$$$$$$$$$$$$
-$$$$$$$$$@%#*+=--::::--=+*#%@$$$$$$$$$$$$$$$
-$$$$$$$$$@%#*+=--:....:--=+*#%@$$$$$$$$$$$$$
-$$$$$$$$$@%#*+=--:....:--=+*#%@$$$$$$$$$$$$$
-$$$$$$$$$@%#*+=--::::--=+*#%@$$$$$$$$$$$$$$$
-$$$$$$$$$$@@%#**++====++*#%@@$$$$$$$$$$$$$$$
-$$$$$$$$$$$$@@%%##****##%%@@$$$$$$$$$$$$$$$$
-$$$$$$$$$$$$$$@@@@%%%%@@@@$$$$$$$$$$$$$$$$$$
-$$$$$$$$$$$$$$$$$$@@@@@@$$$$$$$$$$$$$$$$$$$$
-$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
- $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ 
-  $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$  
-    $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$    
-```
-
-**Command:**
-```powershell
-python cli.py samples/shading_bourke.txt --reconstruct -o out/
-```
-* **Result:** Produces `shading_bourke_reconstructed.png`, resolving the concentric density levels into a smooth, spherical shaded 3D gradient with zero character-grid seams.
-
----
-
-### Example 4: Line-Art Cartoon Sketch
-**Input file:** `samples/cat.txt`
-```text
-       /\_____/\
-      /  o   o  \
-     ( ==  ^  == )
-      )         (
-     (           )
-    ( (  )   (  ) )
-   (__(__)___(__)__)
-```
-
-**Command:**
-```powershell
-# Vector Bézier contour mode
-python cli.py samples/cat.txt -m art:vector -o out/
-
-# Or Crisp Monospace Typography mode with retro green CRT theme
-python cli.py samples/cat.txt -m art:crisp -t terminal_green -o out/
-```
-* **Result:** `cat_vector.svg` traces the cat's ears, whiskers, and paws into smooth cubic Bézier SVG paths. `cat_crisp.png` renders it with anti-aliased monospace typography in phosphor green.
+**Dependencies:** `numpy>=2.0.0`, `Pillow>=10.0.0`, `opencv-python-headless>=4.9.0` (or `opencv-python`), `moderngl>=5.10.0`, `numba>=0.64.0`, `streamlit>=1.38.0` (optional UI), `pytest>=8.0.0` (tests).
 
 ---
 
 ## Quick Start
 
-### 1. Using the Command-Line Interface (`cli.py`)
-
-Run the CLI using your Python environment:
+### 1. CLI
 
 ```powershell
-# 1. View the full interactive manual and help
-python cli.py help
+# List all built-in zero-API showcase presets
+python prism_studio/cli.py --list-presets
 
-# 2. Convert any ASCII diagram (auto-detects and exports SVG + PNG)
-python cli.py samples/flowchart.txt
+# Render a built-in preset at 960x720 (Anime NPR or Stylized PBR)
+python prism_studio/cli.py --preset "Four-Armed Elf Mystic (Multi-Limb + Cloak)" --style anime_npr -o out/elf.png
 
-# 3. Choose a styling theme (light, dark, blueprint, tinted, terminal_green, amber)
-python cli.py samples/network.txt --theme blueprint -o out/
+# Generate from natural language using Groq / Ollama (with automatic offline fallback if unconfigured)
+python prism_studio/cli.py "futuristic alien speedster hero with glowing ankle wheels" --style anime_npr --size 960x720 -o out/speedster.png
 
-# 4. Ultra-High-Definition 3.0x print export
-python cli.py samples/flowchart.txt --scale 3.0 -o out/
+# Include the 320x240 VLM draft self-critique refinement pass before HD render
+python prism_studio/cli.py "cute cat sitting on a high wall at sunset" --vlm-critique -o out/cat.png
 
-# 5. Photographic reconstruction of shaded ASCII art (Bilateral + CLAHE)
-python cli.py samples/house.txt --reconstruct -o out/
-
-# 6. Convert line art into smooth vector Bézier curves
-python cli.py samples/cat.txt -m art:vector -o out/
-
-# 7. Print detailed 6-feature classification scores
-python cli.py samples/cc_diag.txt -v
+# Force offline compositional planner or CPU fallback explicitly
+python prism_studio/cli.py --offline --backend cpu --size 640x480 "elf mystic in forest" -o out/elf_cpu.png
 ```
 
-#### CLI Options Reference:
-| Option | Argument | Description | Default |
-|---|---|---|---|
-| `input` | `path` | Path to ASCII text file (or `help` to show manual) | Required |
-| `-o, --outdir` | `path` | Output directory to save generated files | `./out` |
-| `-m, --mode` | `choice` | `auto`, `diagram`, `art:crisp`, `art:reconstruct`, `art:vector` | `auto` |
-| `-t, --theme` | `choice` | `light`, `dark`, `blueprint`, `tinted`, `terminal_green`, `amber` | Contextual |
-| `-s, --scale` | `float` | PNG supersampling zoom factor ($1.0\times$, $2.0\times$, $3.0\times$) | `2.0` |
-| `--engine` | `choice` | Diagram engine: `auto`, `svgbob`, `aafigure` | `auto` |
-| `--reconstruct` | flag | Force 5-stage photographic reconstruction | Off |
-| `--width` | `int` | Target pixel width for photographic reconstruction | `1200` |
-| `--denoise` | `float` | Bilateral filter smoothing strength factor | `1.0` |
-| `--clahe` | `float` | CLAHE local contrast clip limit | `2.0` |
-| `--format` | `choice` | Output format: `both` (SVG + PNG), `svg`, or `png` | `both` |
-| `-v, --verbose` | flag | Print diagnostic detection scores and font metrics | Off |
+All CLI renders write both `<out>.png` and `<out>.json` (the exact deterministic `SceneDNA`).
 
----
-
-### 2. Using the Interactive Local Web App
-
-Start the built-in Flask web server:
+### 2. Streamlit Studio Web App
 
 ```powershell
-python web/app.py
+streamlit run prism_studio/app.py
 ```
 
-Then open your browser at **`http://127.0.0.1:5000`**.
+Includes preset selection, live camera/aperture/lighting/cel/exposure sliders (zero LLM cost when tweaking optics), dual `anime_npr` / `stylized_pbr` switching, raw `SceneDNA` JSON editor, optional `320×240` Draft-vs-Final VLM critique viewer, and explicit CPU fallback banners.
 
-Features:
-* **One-Click Sample Loader:** Select from pre-loaded architecture flowcharts, network topologies, cat sketches, or house scenes.
-* **Real-Time Classification Badge:** Shows category (`DIAGRAM` vs `ART`), subtype, confidence percentage, and structural explanation.
-* **Interactive Controls:** Toggle modes, visual themes, DPI scale, and denoise sliders with live preview.
-* **Side-by-Side Inspector:** View the rendered image preview alongside the raw SVG vector code.
-* **One-Click Downloads:** Download the final SVG and PNG directly to your computer.
-
----
-
-## Python Library API
-
-You can also import and use `ascii2image` as a Python module in your own scripts:
+### 3. Python API
 
 ```python
-from ascii2image import (
-    classify_ascii,
-    diagram_to_svg,
-    render_art_crisp_svg,
-    render_art_crisp_png,
-    reconstruct_art_photo,
-    vectorize_line_art_svg,
-    svg_to_png
+from prism_studio import generate_image, PRESET_SCENES, render_scene_dna, scene_dna_from_dict
+
+# Option A: Natural language prompt -> SceneDNA -> Render
+res = generate_image(
+    "cute cat sitting on a high wall at sunset",
+    style_mode="anime_npr",
+    width=960,
+    height=720,
+    use_vlm_critique=False,
+    prefer_backend="auto",
 )
+with open("cat_wall.png", "wb") as f:
+    f.write(res.png_bytes)
 
-text = """
-+---------+       +---------+
-| Client  | ----> | Server  |
-+---------+       +---------+
-"""
-
-# 1. Classify ASCII input
-result = classify_ascii(text)
-print(f"Type: {result.category} [{result.subtype}], Confidence: {result.confidence:.1%}")
-
-# 2. Render diagram to SVG
-svg_data = diagram_to_svg(text, theme="blueprint")
-
-# 3. Export SVG to high-DPI PNG bytes
-png_bytes = svg_to_png(svg_data, scale=2.0)
-with open("diagram.png", "wb") as f:
-    f.write(png_bytes)
-
-# 4. Photographic reconstruction of shaded art
-art_text = open("samples/house.txt").read()
-gray_image = reconstruct_art_photo(art_text, target_width=1200)
-# Returns a standard OpenCV uint8 numpy array (H x W)
+# Option B: Deterministic SceneDNA preset render
+dna = scene_dna_from_dict(PRESET_SCENES["XLR8 Wheel-Leg Speedster (Alien Hybrid)"])
+out = render_scene_dna(dna, width=960, height=720)
+if out.backend_notice:
+    print(out.backend_notice)
 ```
 
 ---
 
-## Theme Palette Reference
+## Configuration (`.env`)
 
-| Theme Name | Background | Stroke / Foreground | Fill | Best For |
-|---|---|---|---|---|
-| `light` | `#ffffff` | `#1e293b` (Slate 800) | `#f8fafc` | Technical documentation, white papers |
-| `dark` | `#0f172a` (Slate 900) | `#38bdf8` (Sky 400) | `#1e293b` | Modern dark-mode IDEs, presentations |
-| `blueprint` | `#1e3a8a` (CAD Blue) | `#93c5fd` (Soft Blue) | `#172554` | Engineering & network architecture |
-| `tinted` | `#fafafa` (Warm Gray) | `#334155` (Slate 700) | `#e0f2fe` | Clean product blogs & infographics |
-| `terminal_green` | `#051005` (Deep Black) | `#22c55e` (Phosphor) | `#051005` | Retro CRT aesthetic, hacker line-art |
-| `amber` | `#120a00` (Dark Choc) | `#f59e0b` (Amber CRT) | `#120a00` | Warm retro terminal aesthetic |
+Copy `prism_studio/.env.example` to `prism_studio/.env` (or reuse a parent repository `.env`; `load_director_env()` checks both automatically):
 
----
-
-## Project Architecture
-
-```
-ASCII to Image Generator/
-├── .gitignore          # Ignores venvs, cache, and output folders
-├── cli.py              # User-facing CLI with built-in manual
-├── README.md           # Documentation & guides
-├── requirements.txt    # Project dependencies
-├── ascii2image/        # Core universal package
-│   ├── __init__.py     # Package exports
-│   ├── detect.py       # 6-feature topological & statistical classifier
-│   ├── ink.py          # Exact photometric fixed-cell calibration & sub-cell atlas
-│   ├── diagram.py      # Diagram parsing (svgbob / aafigure) + themes
-│   ├── art.py          # Crisp typography, 5-stage reconstruction & Bézier contours
-│   └── export.py       # resvg_py high-DPI SVG -> PNG rasterizer
-├── samples/            # Verified sample ASCII inputs (.txt)
-│   ├── bright.txt
-│   ├── cat.txt
-│   ├── cc_diag.txt
-│   ├── flowchart.txt
-│   ├── house.txt
-│   ├── network.txt
-│   ├── portrait.txt
-│   └── shading_bourke.txt
-├── tests/              # Pytest test suite (26 unit tests)
-└── web/                # Local Flask application & interactive UI
-    ├── app.py
-    ├── templates/index.html
-    └── static/ (style.css, app.js)
-```
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `LLM_PROVIDER` | `groq` | Active director backend (`groq` or `ollama`) |
+| `GROQ_API_KEY` | *(empty)* | Groq Cloud API key (`allow_fallback=True` drops gracefully to offline director when omitted) |
+| `GROQ_HOST` | `https://api.groq.com/openai/v1` | Groq OpenAI-compatible base URL |
+| `GROQ_TEXT_MODEL` | `openai/gpt-oss-20b` | Text JSON Scene Director model (also honors `GROQ_MODEL` alias) |
+| `GROQ_VISION_MODEL` | `meta-llama/llama-4-scout-17b-16e-instruct` | VLM Draft Critic model (`--vlm-critique`) |
+| `OLLAMA_API_KEY` | *(empty)* | Optional bearer key for Ollama Cloud |
+| `OLLAMA_HOST` | `http://localhost:11434` | Local or remote Ollama endpoint |
+| `OLLAMA_TEXT_MODEL` | `gpt-oss:20b-cloud` | Ollama Scene Director model (also honors `OLLAMA_MODEL` alias) |
+| `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Ollama VLM Draft Critic model |
 
 ---
 
-## Running Automated Tests
+## Observed Benchmarks
 
-The test suite covers photometric monotonicity, tight-bbox prevention, 6-feature classification, diagram rendering, reconstruction, and web API endpoints:
+Measured on Windows with **Intel(R) UHD Graphics** (`OpenGL 3.3.0`) and **Numba `0.68.1`** multi-core CPU:
+
+| Backend | Resolution | Scene Complexity | Measured Render Time | Peak Python Memory |
+| :--- | :--- | :--- | :--- | :--- |
+| `moderngl_gpu` *(1st pass / compile)* | `960×720` | `splines=15 solids=3` | `6.015s` | `5.4 MB` |
+| `moderngl_gpu` *(Cat PBR)* | `960×720` | `splines=15 solids=3` | `1.456s` | `8.9 MB` |
+| `moderngl_gpu` *(Stage Singer)* | `960×720` | `splines=37 solids=4` | `1.648s` | `9.0 MB` |
+| `moderngl_gpu` *(Four-Armed Elf)* | `960×720` | `splines=40 solids=3` | `2.028s` | `9.0 MB` |
+| `moderngl_gpu` *(XLR8 Speedster)* | `960×720` | `splines=18 solids=4` | `1.422s` | `9.0 MB` |
+| `cpu_numba` *(1st JIT compile)* | `320×240` | `splines=15 solids=3` | `88.593s` | — |
+| `cpu_numba` *(Cached fallback)* | `640×480` | `splines=15 solids=3` | `11.233s` | — |
+
+---
+
+## Project Layout
+
+```
+prism_studio/
+├── app.py                          # Streamlit studio web UI
+├── cli.py                          # Convenience CLI runner
+├── pyproject.toml                  # Package metadata & `prism-studio` console script
+├── requirements.txt                # Standalone runtime & dev dependencies
+├── .env.example                    # Groq / Ollama environment template
+├── prism_studio/
+│   ├── __init__.py                 # High-level generate_image / render_scene_dna API
+│   ├── cli_entry.py                # argparse CLI implementation
+│   ├── schema/
+│   │   ├── scene_dna.py            # Compositional SceneDNA dataclasses & JSON schema
+│   │   └── patch_schema.py         # Bounded VLM ScenePatch delta applier
+│   ├── math_ops/
+│   │   ├── primitives.py           # Swept super-splines, Bishop frames, SH, C2 smin/smax, cloth, masonry
+│   │   ├── decals_2d.py            # Analytical 2D UV anime/feline eyes & garment decals
+│   │   └── materials.py            # sRGB/linear conversions & procedural shading helpers
+│   ├── compiler/
+│   │   ├── kinematics.py           # 2-bone IK limbs, extra_limb_chains, mechanical_attachments
+│   │   ├── cranial_sh.py           # L <= 3 Spherical Harmonics head synthesis
+│   │   ├── hair_fur.py             # Scalp cap, bangs & damped ponytail/lock ribbons
+│   │   ├── garment_uv.py           # Body-UV cloth compiler & pelvis/footwear bindings
+│   │   ├── world_zones.py          # Zone 1 props, Zone 2 midground silhouettes, Zone 3 emitters
+│   │   ├── validator.py            # Structural validation & bounds clamping
+│   │   ├── layout_solver.py        # DAG topological support placement solver
+│   │   └── bytecode.py             # GPU/CPU uniform float32 RGBA32F atlas packer
+│   ├── engine/
+│   │   ├── glsl_Pass1_raymarch.glsl# Primary raymarcher, 2D eyes, cloth shells, cel/PBR shading
+│   │   ├── glsl_Pass2_optics.glsl  # Ink outlines, Vogel DOF, god-rays, bokeh, bloom, ACES
+│   │   ├── gpu_moderngl.py         # Persistent headless ModernGL renderer
+│   │   ├── cpu_kernel.py           # Multi-core Numba @njit + NumPy CPU fallback kernel
+│   │   ├── optics_cpu.py           # OpenCV/NumPy 6-stage optical post-FX parity pass
+│   │   └── backend_manager.py      # GPU -> CPU orchestration with explicit user notice
+│   └── director/
+│       ├── llm_client.py           # Groq & Ollama text/vision JSON client
+│       ├── scene_director.py       # Natural-language -> SceneDNA + offline presets & composer
+│       └── vlm_critic.py           # 320x240 draft critique & ScenePatch refinement loop
+└── tests/                          # Standalone automated pytest suite (15 tests)
+    ├── conftest.py
+    ├── test_backends_parity.py
+    ├── test_director_and_critic.py
+    ├── test_garments_and_decals.py
+    ├── test_kinematics_anatomy.py
+    ├── test_math_operators.py
+    └── test_world_and_solver.py
+```
+
+---
+
+## Automated Test Suite
 
 ```powershell
-python -m pytest tests -v
+python -m pytest prism_studio/tests -v
 ```
 
-All 26 unit tests run in ~1.1 seconds completely offline.
+All **15 tests across 6 test suites pass** (`15 passed, 1 warning in 7.88s`), verifying zero `ascii2image` imports inside `prism_studio/`, GPU & CPU fallback parity with explicit user warning notice, compositional 4-arm & wheel-leg IK kinematics, cranial SH continuity, $C^2$ `smin`/masonry/cloth clearance math, 2D eye & decal evaluators, DAG placement solving, offline scene composition, and mocked LLM/VLM critique loops.

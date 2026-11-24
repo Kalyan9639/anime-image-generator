@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prism-studio"
+version = "0.1.0"
+description = "Standalone compositional pure-mathematical natural-language-to-image synthesizer with Bone-Graph anatomy, Body-UV garments, 3-zone worlds, ModernGL GPU acceleration, and HDR anime/PBR optics."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "numpy>=2.0.0",
+    "Pillow>=10.0.0",
+    "opencv-python-headless>=4.9.0",
+    "moderngl>=5.10.0",
+    "numba>=0.64.0",
+    "streamlit>=1.38.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+prism-studio = "prism_studio.cli_entry:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["prism_studio*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

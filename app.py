@@ -1,455 +1,206 @@
 """
-Streamlit Web Application for ASCII to Image Generator (ascii2image).
+PrismStudio Streamlit Web Application.
 
-Deployment-ready interactive UI for converting ASCII diagrams and ASCII art
-into high-quality SVG and PNG images using pure mathematical signal processing
-and vector graphics (zero AI).
+Standalone natural-language-to-image pure-math studio featuring:
+- Open-ended Compositional Scene Director (Groq / Ollama + Offline Director)
+- Dual Aesthetic Modes (`anime_npr` vs `stylized_pbr`)
+- Optional 320x240 VLM Draft Self-Critique loop with Draft-vs-Final preview
+- Live Zero-LLM Camera / Aperture / Lighting / Cel / Exposure controls
+- ModernGL Intel UHD GPU renderer + Explicit-Notify Fast CPU Fallback
 """
 
 from __future__ import annotations
 
-import hashlib
-import inspect
-import io
-from pathlib import Path
-from typing import Any, Callable, Dict
-
-import cv2
-from PIL import Image
+import json
 import streamlit as st
 
-from ascii2image import (
-    classify_ascii,
-    diagram_to_svg,
-    get_available_engines,
-    reconstruct_art_photo,
-    render_art_crisp_png,
-    render_art_crisp_svg,
-    sanitize_ascii_text,
-    svg_to_png,
-    vectorize_line_art_svg,
+from prism_studio import (
+    PRESET_SCENES,
+    build_offline_director_scene,
+    critique_and_patch_scene,
+    load_director_env,
+    plan_scene_dna,
+    render_scene_dna,
+    scene_dna_from_dict,
 )
 
-ROOT_DIR = Path(__file__).resolve().parent
-SAMPLES_DIR = ROOT_DIR / "samples"
-FALLBACK_SAMPLE = "+-------+     +-------+\n| Input | --> | Image |\n+-------+     +-------+"
 
 st.set_page_config(
-    page_title="ASCII → Image Generator",
-    page_icon="▦",
+    page_title="PrismStudio — Compositional Math Image Studio",
+    page_icon="✦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Monospace styling with white-space: pre and horizontal scrolling so wide ASCII
-# lines NEVER soft-wrap or become visually disoriented in the editor.
-st.markdown(
-    """
-    <style>
-    textarea,
-    [data-testid="stTextArea"] textarea {
-        font-family: "Consolas", "DejaVu Sans Mono", "Courier New", monospace !important;
-        font-size: 13px !important;
-        line-height: 1.35 !important;
-        white-space: pre !important;
-        overflow-wrap: normal !important;
-        word-wrap: normal !important;
-        overflow-x: auto !important;
-        tab-size: 4 !important;
-    }
-    .det-card {
-        padding: 0.85rem 1rem;
-        border-radius: 0.6rem;
-        border: 1px solid rgba(128, 128, 128, 0.25);
-        background-color: rgba(56, 189, 248, 0.06);
-        margin-bottom: 0.75rem;
-    }
-    .det-badge {
-        display: inline-block;
-        padding: 0.15rem 0.55rem;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-        color: #ffffff;
-        margin-right: 0.5rem;
-    }
-    .badge-diagram { background-color: #0284c7; }
-    .badge-art { background-color: #7c3aed; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-def _stretch_kwargs(widget_fn: Callable[..., Any]) -> Dict[str, Any]:
-    """
-    Uses `width="stretch"` on Streamlit >= 1.49 (avoiding deprecation warnings)
-    and falls back to `use_container_width=True` on older Streamlit 1.32–1.48.
-    """
-    try:
-        params = inspect.signature(widget_fn).parameters
-        if "width" in params:
-            ver_parts = tuple(int(p) for p in st.__version__.split(".")[:2] if p.isdigit())
-            if ver_parts >= (1, 49):
-                return {"width": "stretch"}
-    except Exception:
-        pass
-    return {"use_container_width": True}
-
-
-@st.cache_data
-def load_samples() -> Dict[str, str]:
-    """Load built-in .txt sample files from the samples/ directory."""
-    samples: Dict[str, str] = {}
-    if SAMPLES_DIR.is_dir():
-        for file in sorted(SAMPLES_DIR.glob("*.txt")):
-            try:
-                label = file.stem.replace("_", " ").title()
-                samples[label] = file.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
-    return samples
-
-
-def resolve_effective_mode(mode: str, category: str, subtype: str) -> str:
-    if mode != "auto":
-        return mode
-    if category == "diagram":
-        return "diagram"
-    if subtype == "art:tone":
-        return "art:reconstruct"
-    return "art:crisp"
-
-
-def resolve_effective_theme(theme: str, effective_mode: str) -> str:
-    if theme != "auto":
-        return theme
-    return "light" if effective_mode == "diagram" else "dark"
-
-
-def _on_sample_change(samples: Dict[str, str]) -> None:
-    chosen = st.session_state.get("sample_selector", "Custom Input")
-    if chosen == "Custom Input":
-        st.session_state["ascii_text"] = ""
-    elif chosen in samples:
-        st.session_state["ascii_text"] = samples[chosen]
-
-
-def _on_text_change(samples: Dict[str, str]) -> None:
-    current = st.session_state.get("ascii_text", "")
-    chosen = st.session_state.get("sample_selector", "Custom Input")
-    if chosen != "Custom Input" and samples.get(chosen) != current:
-        st.session_state["sample_selector"] = "Custom Input"
-
-
-def _on_clear() -> None:
-    st.session_state["ascii_text"] = ""
-    st.session_state["sample_selector"] = "Custom Input"
-    st.session_state["last_upload_hash"] = None
-
-
-def _on_fix_alignment() -> None:
-    current = st.session_state.get("ascii_text", "")
-    cleaned, _ = sanitize_ascii_text(current, repair_alignment=True, strip_blank_edges=True)
-    st.session_state["ascii_text"] = cleaned
-
-
-def _on_file_upload() -> None:
-    uploaded = st.session_state.get("ascii_uploader")
-    if uploaded is None:
-        st.session_state["last_upload_hash"] = None
-        return
-    raw_bytes = uploaded.getvalue()
-    content_hash = hashlib.sha256(raw_bytes).hexdigest()
-    if st.session_state.get("last_upload_hash") != content_hash:
-        st.session_state["ascii_text"] = raw_bytes.decode("utf-8", errors="replace")
-        st.session_state["sample_selector"] = "Custom Input"
-        st.session_state["last_upload_hash"] = content_hash
-
 
 def main() -> None:
-    samples = load_samples()
-    default_sample_name = "Flowchart" if "Flowchart" in samples else (next(iter(samples), None))
-    default_text = samples.get(default_sample_name, FALLBACK_SAMPLE)
-    sample_options = ["Custom Input"] + list(samples.keys())
+    env_cfg = load_director_env()
 
-    if "sample_selector" not in st.session_state:
-        st.session_state["sample_selector"] = (
-            default_sample_name if default_sample_name in sample_options else "Custom Input"
+    if "prism_dna_json" not in st.session_state:
+        st.session_state["prism_dna_json"] = json.dumps(
+            PRESET_SCENES["Cute Cat on High Sunset Wall (Anime)"], indent=2
         )
-    if "ascii_text" not in st.session_state:
-        st.session_state["ascii_text"] = default_text
-    if "last_upload_hash" not in st.session_state:
-        st.session_state["last_upload_hash"] = None
+    if "prism_notices" not in st.session_state:
+        st.session_state["prism_notices"] = []
+    if "prism_draft_png" not in st.session_state:
+        st.session_state["prism_draft_png"] = None
 
-    # ── Header ────────────────────────────────────────────────────────────────
-    st.title("▦ ASCII → Image Generator")
+    st.title("✦ PrismStudio — Pure-Math Generative Image Studio")
     st.caption(
-        "Pure mathematical signal-processing & vector graphics pipeline • "
-        "Zero AI • Exports scalable SVG & high-DPI PNG"
+        "Compositional Bone-Graph Anatomy (4 arms, wheel-legs, elf/cat rigs) • Body-UV Outfits • "
+        "3-Zone World Architecture • ModernGL Intel UHD GPU + Explicit-Notify Fast CPU Fallback"
     )
 
-    # ── Sidebar Controls ──────────────────────────────────────────────────────
     with st.sidebar:
-        st.header("⚙️ Settings")
+        st.header("🎨 Studio Controls")
+        preset_list = ["— Custom Prompt —"] + list(PRESET_SCENES.keys())
+        sel_preset = st.selectbox("Instant Showcase Presets", preset_list, index=1, key="prism_preset_sel")
+        if sel_preset != preset_list[0] and st.session_state.get("prism_last_preset") != sel_preset:
+            st.session_state["prism_dna_json"] = json.dumps(PRESET_SCENES[sel_preset], indent=2)
+            st.session_state["prism_last_preset"] = sel_preset
+            st.session_state["prism_draft_png"] = None
+            st.session_state["prism_notices"] = []
 
-        st.selectbox(
-            "Load Built-in Sample",
-            options=sample_options,
-            key="sample_selector",
-            on_change=_on_sample_change,
-            args=(samples,),
-            help="Select a built-in example, or choose 'Custom Input' for a blank canvas.",
+        style_mode = st.radio(
+            "Visual Aesthetic Mode",
+            options=["anime_npr", "stylized_pbr"],
+            format_func=lambda s: "Anime / NPR Cel + Ink + Kajiya-Kay" if s == "anime_npr" else "Stylized PBR (Soft Plush + GGX)",
+            key="prism_style",
         )
 
-        st.file_uploader(
-            "Or upload a .txt file",
-            type=["txt", "bob", "asc"],
-            key="ascii_uploader",
-            on_change=_on_file_upload,
+        res_map = {"640×480 (Fast)": (640, 480), "960×720 (HD)": (960, 720), "1280×720 (Widescreen)": (1280, 720)}
+        res_key = st.select_slider("Render Resolution", options=list(res_map.keys()), value="960×720 (HD)")
+        rw, rh = res_map[res_key]
+
+        backend_choice = st.selectbox(
+            "Execution Backend",
+            options=["auto", "gpu", "cpu"],
+            format_func=lambda b: {"auto": "Auto (ModernGL GPU -> Fast CPU Fallback)", "gpu": "Force ModernGL GPU", "cpu": "Force Fast CPU Fallback"}[b],
         )
 
-        st.divider()
+        use_vlm = st.checkbox("Enable VLM 320×240 Draft Self-Critique", value=False)
+        offline_only = st.checkbox("Offline Compositional Director (Zero API)", value=False)
 
-        mode_labels = {
-            "auto": "Auto-Detect (Recommended)",
-            "diagram": "Diagram (Vector Paths)",
-            "art:reconstruct": "Art: Photo Reconstruction (Bilateral + CLAHE)",
-            "art:crisp": "Art: Crisp Monospace Typography",
-            "art:vector": "Art: Line Vector Contours (Bézier)",
-        }
-        mode = st.selectbox(
-            "Conversion Mode",
-            options=list(mode_labels.keys()),
-            format_func=lambda k: mode_labels[k],
-            index=0,
+        with st.expander("LLM / VLM Provider Settings", expanded=False):
+            prov = st.radio("Provider", ["groq", "ollama"], index=0 if env_cfg["provider"] == "groq" else 1, horizontal=True)
+            if prov == "groq":
+                api_host = st.text_input("Groq Host", value=env_cfg["groq_host"])
+                text_model = st.text_input("Text Model", value=env_cfg["groq_text_model"])
+                vis_model = st.text_input("Vision Critic Model", value=env_cfg["groq_vision_model"])
+                api_key = st.text_input("GROQ_API_KEY", value=env_cfg["groq_api_key"], type="password")
+            else:
+                api_host = st.text_input("Ollama Host", value=env_cfg["ollama_host"])
+                text_model = st.text_input("Text Model", value=env_cfg["ollama_text_model"])
+                vis_model = st.text_input("Vision Critic Model", value=env_cfg["ollama_vision_model"])
+                api_key = st.text_input("OLLAMA_API_KEY", value=env_cfg["ollama_api_key"], type="password")
+
+        with st.expander("Instant Camera & Optical FX Overrides", expanded=False):
+            ov_enable = st.checkbox("Override SceneDNA Camera/Optics", value=False)
+            ov_az = st.slider("Camera Azimuth (°)", -180, 180, 24)
+            ov_el = st.slider("Camera Elevation (°)", -15, 65, 8)
+            ov_dof = st.slider("Vogel Bokeh DOF", 0.0, 1.0, 0.42, 0.05)
+            ov_ink = st.slider("Ink Outline Strength", 0.0, 1.2, 0.62, 0.05)
+            ov_bloom = st.slider("HDR Bloom", 0.0, 1.5, 0.65, 0.05)
+            ov_exp = st.slider("Exposure", 0.6, 1.8, 1.12, 0.04)
+
+    col_left, col_right = st.columns([1, 1.15], gap="large")
+
+    with col_left:
+        st.subheader("1. Natural-Language Prompt")
+        prompt = st.text_area(
+            "Describe any scene, creature, outfit, or world:",
+            value="cute cat sitting on a high wall at sunset",
+            height=115,
         )
+        c1, c2 = st.columns(2)
+        with c1:
+            gen_btn = st.button("✦ Generate Scene", type="primary", use_container_width=True)
+        with c2:
+            st.button("🔄 Re-Render SceneDNA JSON", use_container_width=True)
 
-        theme_labels = {
-            "auto": "Auto (Light for Diagram, Dark for Art)",
-            "light": "Light",
-            "dark": "Dark Slate",
-            "blueprint": "Blueprint CAD",
-            "tinted": "Tinted Pastel",
-            "terminal_green": "Retro CRT Green",
-            "amber": "Retro Amber",
-        }
-        theme = st.selectbox(
-            "Color Theme",
-            options=list(theme_labels.keys()),
-            format_func=lambda k: theme_labels[k],
-            index=0,
-        )
+        if gen_btn:
+            st.session_state["prism_draft_png"] = None
+            st.session_state["prism_notices"] = []
+            if offline_only:
+                dna = build_offline_director_scene(prompt, style_mode=style_mode)
+                notices = ["Synthesized via offline compositional director."]
+            else:
+                with st.spinner("Planning SceneDNA via LLM Director..."):
+                    plan = plan_scene_dna(
+                        prompt,
+                        style_mode=style_mode,
+                        provider=prov,
+                        host=api_host,
+                        model=text_model,
+                        api_key=api_key,
+                        allow_fallback=True,
+                    )
+                dna = plan.dna
+                notices = list(plan.warnings)
 
-        scale = st.select_slider(
-            "PNG Resolution Scale (DPI)",
-            options=[1.0, 1.5, 2.0, 3.0],
-            value=2.0,
-            format_func=lambda v: f"{v:.1f}x",
-        )
+            if use_vlm:
+                with st.spinner("Rendering 320×240 draft & running VLM self-critique..."):
+                    cr = critique_and_patch_scene(
+                        dna,
+                        prompt,
+                        provider=prov,
+                        host=api_host,
+                        vision_model=vis_model,
+                        api_key=api_key,
+                        prefer_backend=backend_choice,
+                    )
+                dna = cr.patched_dna
+                st.session_state["prism_draft_png"] = cr.draft_png
+                if cr.notice:
+                    notices.append(cr.notice)
 
-        available_engines = get_available_engines()
-        engine = st.selectbox("Diagram Engine", options=["auto"] + available_engines, index=0)
+            st.session_state["prism_dna_json"] = json.dumps(dna.to_dict(), indent=2)
+            st.session_state["prism_notices"] = notices
 
-        auto_repair = st.checkbox(
-            "Auto-repair pasted alignment",
-            value=True,
-            help=(
-                "Automatically cleans Unicode spaces/tabs, unwraps Markdown ``` code fences, "
-                "and repairs missing Line-1 indentation from drag-select copy-paste."
-            ),
-        )
+        with st.expander("Editable SceneDNA JSON (Deterministic Compiler Input)", expanded=True):
+            st.text_area("SceneDNA JSON", key="prism_dna_json", height=380, label_visibility="collapsed")
 
-        with st.expander("Photo Reconstruction Tuning", expanded=False):
-            target_width = st.slider("Target Width (px)", min_value=400, max_value=2000, value=1200, step=100)
-            denoise = st.slider("Denoise Smoothing", min_value=0.2, max_value=2.5, value=1.0, step=0.1)
-            clahe_clip = st.slider("CLAHE Contrast Limit", min_value=1.0, max_value=5.0, value=2.0, step=0.2)
-            invert = st.selectbox("Invert Luminance", options=["auto", "yes", "no"], index=0)
-
-    # ── Main Two-Column Layout ────────────────────────────────────────────────
-    col_in, col_out = st.columns([1, 1], gap="large")
-
-    with col_in:
-        st.subheader("1. Input ASCII Text")
-        ascii_text = st.text_area(
-            "Paste your ASCII diagram or ASCII art below:",
-            key="ascii_text",
-            height=360,
-            label_visibility="collapsed",
-            placeholder="Paste your ASCII diagram or ASCII art here, then click 'Generate Image' (or press Ctrl+Enter)...",
-            on_change=_on_text_change,
-            args=(samples,),
-        )
-
-        # Explicit action buttons so pasting new ASCII ALWAYS has an immediate trigger
-        act_col1, act_col2, act_col3 = st.columns([2, 1, 1])
-        with act_col1:
-            st.button(
-                "⚡ Generate Image",
-                type="primary",
-                **_stretch_kwargs(st.button),
-                help="Apply any newly pasted ASCII text and render the image.",
-            )
-        with act_col2:
-            st.button(
-                "🔧 Fix Align",
-                on_click=_on_fix_alignment,
-                **_stretch_kwargs(st.button),
-                help="Normalize tabs/spaces, unwrap code fences, and fix misaligned Line-1 indent in the editor.",
-            )
-        with act_col3:
-            st.button(
-                "🧹 Clear",
-                on_click=_on_clear,
-                **_stretch_kwargs(st.button),
-                help="Clear the input box to paste fresh ASCII.",
-            )
-
-        if not ascii_text.strip():
-            st.info("Paste ASCII text above (and click **Generate Image** or press **Ctrl+Enter**), or load a sample from the sidebar.")
-            with col_out:
-                st.subheader("2. Converted Output")
-                st.info("Your generated SVG & PNG preview will appear here once you paste ASCII text or select a sample.")
-            return
-
-        effective_text, repair_notes = sanitize_ascii_text(
-            ascii_text,
-            repair_alignment=auto_repair,
-            strip_blank_edges=True,
-        )
-        if not effective_text.strip():
-            st.info("Paste ASCII text above to generate an image.")
-            with col_out:
-                st.subheader("2. Converted Output")
-                st.info("Your generated SVG & PNG preview will appear here.")
-            return
-
-        if repair_notes:
-            st.info("🔧 " + " ".join(repair_notes))
-
-        detection = classify_ascii(effective_text)
-        badge_cls = "badge-diagram" if detection.category == "diagram" else "badge-art"
-        st.markdown(
-            f"""
-            <div class="det-card">
-                <div>
-                    <span class="det-badge {badge_cls}">{detection.category.upper()} · {detection.subtype}</span>
-                    <strong>{detection.confidence * 100:.1f}% Confidence</strong>
-                </div>
-                <div style="margin-top: 0.4rem; font-size: 0.88rem; opacity: 0.85;">
-                    {detection.explanation}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        with st.expander("6-Feature Classifier Diagnostics"):
-            if detection.scores:
-                score_cols = st.columns(3)
-                items = list(detection.scores.items())
-                for idx, (name, val) in enumerate(items):
-                    score_cols[idx % 3].metric(name.replace("_", " ").title(), f"{val:.3f}")
-
-    # ── Conversion Execution ──────────────────────────────────────────────────
-    effective_mode = resolve_effective_mode(mode, detection.category, detection.subtype)
-    effective_theme = resolve_effective_theme(theme, effective_mode)
-
-    # diagram_to_svg accepts light/dark/blueprint/tinted; art modes accept light/dark/blueprint/terminal_green/amber
-    diagram_theme = effective_theme if effective_theme in ("light", "dark", "blueprint", "tinted") else "light"
-    art_theme = "light" if effective_theme == "tinted" else effective_theme
-
-    svg_content: str | None = None
-    png_bytes: bytes | None = None
-
-    with col_out:
-        st.subheader("2. Converted Output")
+    with col_right:
+        st.subheader("2. Synthesized Pure-Math Render")
         try:
-            with st.spinner("Rendering..."):
-                if effective_mode == "diagram":
-                    svg_content = diagram_to_svg(
-                        effective_text,
-                        engine=engine,
-                        theme=diagram_theme,
-                        repair_alignment=auto_repair,
-                    )
-                    png_bytes = svg_to_png(svg_content, scale=scale)
-                elif effective_mode == "art:reconstruct":
-                    mat = reconstruct_art_photo(
-                        effective_text,
-                        target_width=target_width,
-                        invert=invert,
-                        denoise_strength=denoise,
-                        clahe_clip=clahe_clip,
-                    )
-                    ok, buf = cv2.imencode(".png", mat)
-                    if ok:
-                        png_bytes = buf.tobytes()
-                    svg_content = render_art_crisp_svg(
-                        effective_text,
-                        theme=art_theme,
-                        repair_alignment=auto_repair,
-                    )
-                elif effective_mode == "art:vector":
-                    svg_content = vectorize_line_art_svg(effective_text, theme=art_theme)
-                    png_bytes = svg_to_png(svg_content, scale=scale)
-                else:  # art:crisp
-                    svg_content = render_art_crisp_svg(
-                        effective_text,
-                        theme=art_theme,
-                        repair_alignment=auto_repair,
-                    )
-                    png_bytes = render_art_crisp_png(
-                        effective_text,
-                        theme=art_theme,
-                        scale=scale,
-                        repair_alignment=auto_repair,
-                    )
+            dna_obj = scene_dna_from_dict(json.loads(st.session_state["prism_dna_json"]))
+            dna_obj.style_mode = style_mode
+            if ov_enable:
+                dna_obj.camera.azimuth_deg = float(ov_az)
+                dna_obj.camera.elevation_deg = float(ov_el)
+                dna_obj.camera.dof_strength = float(ov_dof)
+                dna_obj.lighting.ink_strength = float(ov_ink)
+                dna_obj.lighting.bloom_intensity = float(ov_bloom)
+                dna_obj.lighting.exposure = float(ov_exp)
 
-            # Action bar: Download buttons
-            dl_col1, dl_col2 = st.columns(2)
-            with dl_col1:
-                if png_bytes:
-                    st.download_button(
-                        label="⬇ Download PNG",
-                        data=png_bytes,
-                        file_name="ascii_output.png",
-                        mime="image/png",
-                        type="primary",
-                        **_stretch_kwargs(st.download_button),
-                    )
-            with dl_col2:
-                if svg_content:
-                    st.download_button(
-                        label="⬇ Download SVG",
-                        data=svg_content,
-                        file_name="ascii_output.svg",
-                        mime="image/svg+xml",
-                        **_stretch_kwargs(st.download_button),
-                    )
+            out = render_scene_dna(dna_obj, width=rw, height=rh, prefer_backend=backend_choice)
 
-            tab_img, tab_svg = st.tabs(["🖼️ Image Preview", "📐 SVG Source"])
+            if out.backend_notice:
+                st.warning(out.backend_notice)
+            for msg in st.session_state.get("prism_notices", []):
+                st.info(msg)
 
-            with tab_img:
-                if png_bytes:
-                    st.image(png_bytes, **_stretch_kwargs(st.image))
-                    pil_img = Image.open(io.BytesIO(png_bytes))
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Dimensions", f"{pil_img.width} × {pil_img.height} px")
-                    m2.metric("PNG Size", f"{len(png_bytes) / 1024:.1f} KB")
-                    m3.metric("Render Mode", f"{effective_mode} ({effective_theme})")
-                else:
-                    st.error("Image rendering returned empty output. Try switching Conversion Mode or Diagram Engine.")
+            st.image(out.png_bytes, use_container_width=True)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Backend", out.backend_used.split("(")[0].strip())
+            m2.metric("Render Time", f"{out.render_seconds:.3f}s")
+            m3.metric("Splines / Solids", f"{len(out.compiled.all_splines)} / {len(out.compiled.all_solids)}")
+            m4.metric("Midground Items", str(len(out.compiled.midground)))
 
-            with tab_svg:
-                if svg_content:
-                    st.code(svg_content, language="xml")
-                else:
-                    st.info("No SVG output for this mode.")
+            st.download_button(
+                "⬇ Download Final PNG",
+                data=out.png_bytes,
+                file_name="prism_studio_render.png",
+                mime="image/png",
+                type="primary",
+                use_container_width=True,
+            )
 
+            if st.session_state.get("prism_draft_png") is not None:
+                with st.expander("VLM Draft (320×240) Before Critique Patch"):
+                    st.image(st.session_state["prism_draft_png"], width=360)
         except Exception as exc:
-            st.error(f"Conversion failed: {exc}")
+            st.error(f"Render error: {exc}")
 
 
 if __name__ == "__main__":
